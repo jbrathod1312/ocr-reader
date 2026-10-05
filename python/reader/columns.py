@@ -923,6 +923,22 @@ def refine_bounds(
                 out.append(None)
         return out
 
+    # A field under one title and clear of the column before it is that title's
+    # column's own, whatever side of the printed edge it starts. A UPC set left
+    # of its centred title is the case: its edge has to move out to the gutter,
+    # and it cannot while the field is counted as nobody's.
+    ends_before = [_max((w.right for f in fields_list for w in f), -math.inf) for fields_list in owned]
+    adopted: list[list[WordBox]] = []
+    for fields in strays:
+        hits = [i for i, column in enumerate(columns) if horizontal_overlap(fields, column) > 0]
+        if len(hits) != 1 or hits[0] == 0:
+            continue
+        before = ends_before[hits[0] - 1]
+        start = _min(w.x for w in fields)
+        if math.isfinite(before) and before + char_width * 1.5 <= start < printed[hits[0]]:
+            owned[hits[0]].append(fields)
+            adopted.append(fields)
+    strays = [fields for fields in strays if not any(fields is each for each in adopted)]
     kinds = kinds_of()
     # A short figure under a centred or left-set title can clear the title.
     for fields in strays:
@@ -1378,6 +1394,15 @@ def is_line_item(cells: Sequence[str]) -> bool:
     has_date = any(DATE_CELL.fullmatch(cell) for cell in filled)
     if has_date and has_money:
         return True
+    # A named line with figures in two or more cells of its own: an order's
+    # `RIP IT RED ZONE  1.0000  $102.00  $102.00`, whose quantity has decimals
+    # and which prints no code. One figure is a total or a subtotal, not a line.
+    # `NET PRICE: $32,165.34   SHIP QTY: 981` is the page adding itself up: its
+    # cells are keys with their figures, and a key is not an item's name.
+    named = any(re.search(r"[A-Za-z]{2,}", cell) and not is_figure(cell) for cell in filled)
+    keyed = any(":" in cell for cell in filled)
+    if named and not keyed and sum(1 for cell in filled if is_figure(cell)) >= 2:
+        return True
     return (has_qty and (has_money or has_code)) or (has_money and has_code)
 
 
@@ -1614,7 +1639,7 @@ def read_column_tables(
         # Well past the usual gap between two item rows.
         item_bands = [line_band(line) for line in layout.items]
         item_gaps = [b.top - a.bottom for a, b in zip(item_bands, item_bands[1:])]
-        pitch = max(median([max(g, 0.0) for g in item_gaps]) * 3, line_height * 2)
+        pitch = max(median([max(g, 0.0) for g in item_gaps]) * 2, line_height * 1.25)
 
         def drop_lead_in() -> None:
             nonlocal lead_in

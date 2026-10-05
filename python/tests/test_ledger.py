@@ -137,3 +137,26 @@ def test_a_field_label_is_not_the_start_of_an_item_even_when_misread():
     for label in ("P.O.:", "P.0.:"):
         cells = row_cells(assemble_receipt(_invoice(label), 0.5, None))
         assert cells and cells[0][0] == "144732", label
+
+
+def _order() -> list[WordBox]:
+    words = [word("Item", 160, 96), word("Qty", 1100, 96), word("Unit", 1400, 96), word("price", 1480, 96), word("Total", 1800, 96)]
+    for n, (name, qty, unit, total) in enumerate(
+        [("RIP IT RED ZONE 16OZ CAN", "1.0000", "$102.00", "$102.00"),
+         ("Pack water", "3.0000", "$94.33", "$283.00"),
+         ("LD BLUE 100 BOX", "1.0000", "$101.00", "$101.00")]
+    ):
+        y = 150 + n * 40
+        words += [word(name, 160, y), right(qty, 1230, y), right(unit, 1580, y), right(total, 1950, y)]
+    y = 400
+    for key, amount in (("Subtotal", "$486.00"), ("Tax", "$14.00"), ("Total paid", "$500.00")):
+        words += [word(key, 160, y), right(amount, 1950, y)]
+        y += 36
+    return words
+
+
+def test_an_order_with_decimal_quantities_and_no_codes_reads_its_lines():
+    cells = row_cells(assemble_receipt(_order(), 0.5, None))
+    assert [c[0] for c in cells] == ["RIP IT RED ZONE 16OZ CAN", "Pack water", "LD BLUE 100 BOX"]
+    assert [c for c in cells[1] if c] == ["Pack water", "3.0000", "$94.33", "$283.00"]
+
