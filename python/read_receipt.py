@@ -536,7 +536,7 @@ def split_line_into_words(
 # brightest channel, on a tint, has nothing printed in it: it is the overlay's
 # lettering, which the recogniser reads as a letter.
 OVERLAY_BRIGHT = 150
-OVERLAY_TINT = 0.25
+OVERLAY_TINT = 0.1
 
 
 def overlay_only(color: np.ndarray, x0: float, y0: float, x1: float, y1: float) -> bool:
