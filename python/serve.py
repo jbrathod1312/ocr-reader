@@ -571,7 +571,7 @@ def _recognise(pixels) -> list:
             height=float(word["height"]),
             confidence=float(word["confidence"]),
         )
-        for word in read_words(engine(), page, scale=2.0)
+        for word in read_words(engine(), page, scale=2.0, color=pixels)
     ]
 
 

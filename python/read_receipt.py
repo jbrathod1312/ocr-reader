@@ -46,7 +46,7 @@ import numpy as np
 # this reader.
 
 PAPER = 128
-RED_CHROMA = 45
+TINT_CHROMA = 45
 BAR_RUN = 0.03
 BAR_RUN_MIN = 36
 # The exponent is 2 on purpose. Cubing preserves more of a covered stroke and
@@ -95,19 +95,23 @@ def suppress_colored_watermark(rgb: np.ndarray) -> tuple[np.ndarray, float]:
     """
     Lift the coloured overlay off the page.
 
-    Printed ink is dark in every channel; a red stamp is dark only in red, so
-    green and blue still carry the page underneath it. Returns a greyscale image
-    and the fraction of pixels painted out.
+    Printed ink is dark in every channel; a tinted overlay is only dark in the
+    channels it absorbs, so the others still carry the page underneath it, in
+    whatever colour the overlay is. Returns a greyscale image and the fraction
+    of pixels painted out.
     """
     height, width = rgb.shape[:2]
     r = rgb[:, :, 0].astype(np.int16)
     g = rgb[:, :, 1].astype(np.int16)
     b = rgb[:, :, 2].astype(np.int16)
 
+    # Any hue: a watermark is as likely to be blue or green as red. Print is
+    # dark in every channel, so what a tint leaves of it is the darkest channel
+    # — for a red-dominant pixel that is min(g, b), as it always was.
     chroma = rgb.max(axis=2).astype(np.int16) - rgb.min(axis=2).astype(np.int16)
-    red = (r > g) & (r > b) & (chroma >= RED_CHROMA)
+    red = chroma >= TINT_CHROMA
 
-    stroke = np.minimum(g, b).astype(np.float32)
+    stroke = rgb.min(axis=2).astype(np.float32)
     run_len, run_med = _vertical_run_stats(red, stroke)
 
     bar_run = max(BAR_RUN_MIN, round(height * BAR_RUN))
@@ -523,6 +527,96 @@ def split_line_into_words(
 
 
 # --------------------------------------------------------------------------- #
+# Watermark lettering at the end of a line                                     #
+# --------------------------------------------------------------------------- #
+
+# Print is dark in every channel — the brightest of them 40 to 90 on a
+# photographed receipt — while a tinted overlay is bright in at least one, of
+# whatever hue. So a character whose box holds no pixel darker than this in its
+# brightest channel, on a tint, has nothing printed in it: it is the overlay's
+# lettering, which the recogniser reads as a letter.
+OVERLAY_BRIGHT = 150
+OVERLAY_TINT = 0.25
+
+
+def overlay_only(color: np.ndarray, x0: float, y0: float, x1: float, y1: float) -> bool:
+    """Whether a character's box on the original page holds only red overlay."""
+    height, width = color.shape[:2]
+    left, right = max(0, int(x0)), min(width, int(np.ceil(x1)) + 1)
+    top, bottom = max(0, int(y0)), min(height, int(np.ceil(y1)))
+    if right <= left or bottom <= top:
+        return False
+    crop = color[top:bottom, left:right].reshape(-1, 3).astype(np.int16)
+    brightest = crop.max(axis=1)
+    tinted = brightest - crop.min(axis=1) >= TINT_CHROMA
+    return bool(np.percentile(brightest, 3) >= OVERLAY_BRIGHT and tinted.mean() >= OVERLAY_TINT)
+
+
+def is_overlay_line(
+    text: str,
+    spans: list[tuple[float, float]],
+    color: np.ndarray,
+    y0: float,
+    y1: float,
+    scale: float,
+) -> bool:
+    """Whether every character of a line is overlay, with nothing printed in any of them."""
+    if len(spans) != len(text):
+        return False
+    inked = [
+        index
+        for index, char in enumerate(text)
+        if not char.isspace()
+    ]
+    # A word of it, not a speck or a figure: a stray mark may be noise as easily
+    # as overlay, and a figure is the one thing a table cannot afford to lose.
+    letters = sum(1 for i in inked if text[i].isalpha())
+    return len(inked) >= 3 and letters >= len(inked) * 0.75 and all(
+        overlay_only(color, spans[i][0] / scale, y0 / scale, spans[i][1] / scale, y1 / scale)
+        for i in inked
+    )
+
+
+def trim_overlay_edges(
+    text: str,
+    spans: list[tuple[float, float]],
+    color: np.ndarray,
+    y0: float,
+    y1: float,
+    scale: float,
+) -> tuple[str, list[tuple[float, float]]]:
+    """
+    `text` without letters of the red overlay at either end.
+
+    A watermark behind a line's first or last word, in any colour and with any
+    lettering, is detected as part of the line — `Arkansas` under `RAFFLE Cashes` comes back as `AdkRAFFLE Cashes` —
+    and the letters it adds are not on the page. Only the ends are trimmed, and
+    never the whole line: a line of lettering with nothing printed in it might
+    be print in a pale ink, and a letter inside a line has print on both sides.
+    """
+    if len(spans) != len(text) or len(text) < 2:
+        return text, spans
+
+    def bare(index: int) -> bool:
+        char = text[index]
+        left, right = spans[index]
+        return not char.isspace() and overlay_only(color, left / scale, y0 / scale, right / scale, y1 / scale)
+
+    start, end = 0, len(text)
+    while start < end and (text[start].isspace() or bare(start)):
+        start += 1
+    while end > start and (text[end - 1].isspace() or bare(end - 1)):
+        end -= 1
+    # Nothing left that has print in it: leave the line as it was.
+    if start >= end or not any(not c.isspace() for c in text[start:end]):
+        return text, spans
+    # Only trim where letters were actually found to be overlay.
+    if not any(bare(i) for i in [*range(0, start), *range(end, len(text))]):
+        return text, spans
+    return text[start:end], spans[start:end]
+
+
+# --------------------------------------------------------------------------- #
 # Driver                                                                       #
 # --------------------------------------------------------------------------- #
 
@@ -575,7 +669,11 @@ def opencv_builds() -> list[str]:
 
 
 def read_words(
-    engine, page: np.ndarray, scale: float, restore: bool = True
+    engine,
+    page: np.ndarray,
+    scale: float,
+    restore: bool = True,
+    color: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     import cv2
 
@@ -610,6 +708,7 @@ def read_words(
     rereads = dict(zip(worded, reread_lines(engine, source, boxes)))
 
     lines: list[tuple[float, float, float, float, str, float, list | None]] = []
+    overlay_lines: set[int] = set()
     for position, entry in enumerate(result):
         box, text, score = entry[0], str(entry[1]), float(entry[2])
         if position in rereads:
@@ -618,16 +717,38 @@ def read_words(
         points = np.asarray(box, dtype=np.float32)
         x0, y0 = points[:, 0].min(), points[:, 1].min()
         x1, y1 = points[:, 0].max(), points[:, 1].max()
+        # A line set down the margin — `MyArkansasLottery.com` up the edge of a
+        # receipt — arrives as a tall, narrow box. Its letters are spread across
+        # a sliver and its height reaches over every table line beside it, so
+        # it would be read into one of them. A line of text is wider than it is
+        # tall; three or more characters in a box twice as tall as wide are not
+        # text on a row. The PDF's own reader drops these for the same reason.
+        if len(text.strip()) >= 3 and (y1 - y0) > 2 * (x1 - x0):
+            continue
         spans = None
         if restore and char_boxes and len(char_boxes) == len(text):
             spans = []
             for char_box in char_boxes:
                 xs = np.asarray(char_box, dtype=np.float32)[:, 0]
                 spans.append((float(xs.min()), float(xs.max())))
+            if color is not None:
+                if is_overlay_line(text, spans, color, float(y0), float(y1), scale):
+                    overlay_lines.add(len(lines))
+                trimmed, kept = trim_overlay_edges(text, spans, color, float(y0), float(y1), scale)
+                if trimmed != text:
+                    text, spans = trimmed, kept
+                    x0 = min(left for left, _ in spans)
+                    x1 = max(right for _, right in spans)
             gaps, glyphs = ink_gaps(grey, int(x0), int(y0), int(np.ceil(x1)), int(np.ceil(y1)))
             text, spans = restore_spaces(text, spans, gaps, glyphs)
             spans = [(left / scale, right / scale) for left, right in spans]
         lines.append((x0, y0, x1, y1, text, score, spans))
+
+    # A line that is all overlay — the watermark's own lettering, read as words
+    # — has no business in the rows. Dropped only where most of the page is
+    # printed in dark ink, so a document set in a pale ink is not emptied.
+    if overlay_lines and len(overlay_lines) * 2 < len(lines):
+        lines = [line for index, line in enumerate(lines) if index not in overlay_lines]
 
     # Two phases: the pack-code length has to be known from the whole page
     # before any line can be cut, because the glued lines are exactly the ones
@@ -692,7 +813,8 @@ def main() -> int:
 
     engine = load_engine()
     passes = [
-        {"scale": scale, "words": read_words(engine, page, scale)} for scale in args.scales
+        {"scale": scale, "words": read_words(engine, page, scale, color=rgb)}
+        for scale in args.scales
     ]
 
     json.dump(

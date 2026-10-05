@@ -1275,6 +1275,11 @@ def place_line(buckets: Sequence[Sequence[WordBox]], layout: TableLayout) -> str
         # too; `P.O.:` is a field label, and a label has no number in it.
         if profile is not None and profile.kind == "code" and not re.search(r"\d", text):
             return None
+        # A label ending in a colon is a label, however it was read: the
+        # recogniser takes the O of `P.O.:` for a zero as often as not, and a
+        # zero makes a label look like a code.
+        if text.endswith(":") and profile is not None and profile.kind != "text":
+            return None
         if profile is not None:
             start = _min(w.x for w in inked)
             end = _max(w.right for w in inked)

@@ -113,3 +113,27 @@ def test_a_totals_block_under_the_items_is_not_rows():
     # Labels no vocabulary knows: only where the lines sit and what they hold.
     assert not any(("Zebras" in " ".join(c)) or ("Mango" in " ".join(c)) for c in cells)
     assert len(cells) == 4
+
+
+def _invoice(label: str) -> list[WordBox]:
+    words = [
+        word("MFG", 64, 96), word("ITEM", 302, 96), word("DESCRIPTION", 568, 96),
+        word("ORDER", 1114, 96), word("PRICE", 1400, 96),
+    ]
+    words += [word(label, 64, 150), word("WEB6842382", 302, 150)]
+    for n, (mfg, item, text, qty, price) in enumerate(
+        [("144732", "556788", "MUSKETEERS MULTI", "1", "$273.60"),
+         ("718128", "507267", "BERRY EXTRA", "5", "$403.92"),
+         ("768123", "633383", "RASPBERRY EXTRA", "2", "$403.92"),
+         ("783188", "743029", "STRENGTH CHERRY", "1", "$403.92")]
+    ):
+        y = 186 + n * 36
+        words += [word(mfg, 64, y), word(item, 302, y), word(text, 568, y), word(qty, 1114, y), word(price, 1400, y)]
+    return words
+
+
+def test_a_field_label_is_not_the_start_of_an_item_even_when_misread():
+    # `P.0.:` is what the recogniser makes of `P.O.:` as often as not.
+    for label in ("P.O.:", "P.0.:"):
+        cells = row_cells(assemble_receipt(_invoice(label), 0.5, None))
+        assert cells and cells[0][0] == "144732", label
