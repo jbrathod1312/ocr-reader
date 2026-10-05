@@ -1,4 +1,5 @@
 import { Pager } from '../../components/Pager'
+import { StatementSummary } from '../../components/StatementSummary'
 import { ExtraTables, FieldsView } from '../../components/ResultView'
 import { validCount } from '../../components/row-status'
 import { resultTitle, type ReceiptSession } from './types'
@@ -7,8 +8,10 @@ import { resultTitle, type ReceiptSession } from './types'
 export function ResultPanel({ session }: { session: ReceiptSession }) {
   const {
     result,
+    statement,
     edited,
     validated,
+    removed,
     pageError,
     busy,
     currentPage,
@@ -21,6 +24,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
     droppedTables,
     toggleTable,
     onEditPage,
+    onRemoveRowPage,
     validateAll,
     resetEdits,
     switchPdfPage,
@@ -83,6 +87,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
             </div>
           </div>
           <div className="card__body card__body--compact">
+            {statement && <StatementSummary statement={statement} />}
             <FieldsView
               result={result}
               edited={edited}
@@ -92,6 +97,8 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
               pages={tablePages}
               currentPage={currentPage}
               onEditPage={onEditPage}
+              onRemoveRowPage={onRemoveRowPage}
+              removed={removed}
               onOpenPage={isPdfMode ? switchPdfPage : undefined}
             />
           </div>

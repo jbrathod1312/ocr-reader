@@ -2403,3 +2403,157 @@ button {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* The row number is where a row is removed: no column of its own, since the
+   table shows only what the document prints. The bin takes the number's place
+   while the row is hovered or has focus. */
+.fields td.td--seq .seq__remove {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.fields tbody tr:hover td.td--seq .seq__remove,
+.fields td.td--seq .seq__remove:focus-visible {
+  display: flex;
+}
+
+.fields td.td--seq .seq__remove:hover,
+.fields td.td--seq .seq__remove:focus-visible {
+  color: var(--danger, #dc2626);
+}
+
+/* A modal question. The backdrop is the dialog's own, so the page behind stays put. */
+dialog.confirm {
+  width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+
+dialog.confirm::backdrop {
+  background: rgb(15 23 42 / 0.45);
+}
+
+.confirm__body {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.confirm__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.confirm__text {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.confirm__text p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* What the document is: said by the person, picked from two. */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mode-toggle__label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mode-toggle .segmented__option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* A bank statement's own checks, above its rows. */
+.statement {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.statement__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.statement__chip {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.statement__chip--ok {
+  border-color: var(--ok-border, var(--border));
+  background: var(--ok-soft, var(--bg-sunken));
+  color: var(--ok-text, var(--ok));
+}
+
+.statement__chip--bad {
+  border-color: var(--err-border);
+  background: var(--err-soft);
+  color: var(--err-text);
+}
+
+.statement__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+}
+
+.statement__fact {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.statement__fact dt {
+  color: var(--text-muted);
+}
+
+.statement__fact dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-weight: 600;
+}

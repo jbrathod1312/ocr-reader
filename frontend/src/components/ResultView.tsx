@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from 'react'
 
 import { requestExport, type ExportPage, type ExtraTable } from '../ocr/api'
 import { exportBaseName, saveFile } from '../lib/download'
+import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadIcon } from './ExportButtons'
 import { rowCells, toPublicJson } from '../ocr/result'
 import {
@@ -39,16 +40,15 @@ interface FieldsViewProps {
   currentPage?: number
   /** Edit a row of any page: a search shows rows from all of them. */
   onEditPage?: (pageIndex: number, rowIndex: number, cellIndex: number, value: string) => void
+  /** Take a row of any page out of the reading. */
+  onRemoveRowPage?: (pageIndex: number, rowIndex: number) => void
+  /** How many rows of the page on screen have been taken out. */
+  removed?: number
   /** Show a page, from a search result's page number. */
   onOpenPage?: (pageIndex: number) => void
 }
 
-const EMPTY: Record<OcrResult['kind'], string> = {
-  inventory: 'No inventory rows were read.',
-  settlements: 'No pack settlements were read.',
-  invoice: 'No invoice lines were read.',
-  table: 'No table rows were read.',
-}
+const EMPTY = 'No table rows were read.'
 
 /** Which rows the table is showing. */
 type FilterMode = 'all' | 'flagged' | 'edited' | 'valid'
@@ -63,24 +63,52 @@ const FILTERS: { value: FilterMode; label: string }[] = [
 /** Rows shown before `View More`. About a screenful on a laptop. */
 const PAGE_SIZE = 12
 
-/** The column that holds the description, which should stay left-aligned. */
-function wideIndex(result: OcrResult): number {
-  if (result.kind === 'invoice') return 0
-  if (result.kind !== 'table') return 1
-  const description = result.headers.findIndex((header) => /description|product|item name/i.test(header))
-  return description >= 0 ? description : 0
+/** A cell that is a figure: digits with the marks a number is written with. */
+const FIGURE = /^[$(-]?\d[\d,.:/]*\)?[A-Za-z]{0,2}%?$/
+
+interface Profile {
+  /** Whether each column holds figures. */
+  numeric: boolean[]
+  /** The text column with the longest cells, which should stay left-aligned. */
+  wide: number
 }
 
-/** Columns whose readings are numbers, so a header and its cells line up alike. */
-function columnIsNumeric(result: OcrResult, index: number): boolean {
-  if (result.kind === 'table') return isNumericHeader(result.headers[index] ?? '')
-  return index !== wideIndex(result)
+const PROFILES = new WeakMap<OcrResult, Profile>()
+
+/**
+ * What each column is made of, read from its cells and not from what it is
+ * called: a column of figures lines up on the right, and the text column with
+ * the longest readings is the one given room.
+ */
+function profileOf(result: OcrResult): Profile {
+  const known = PROFILES.get(result)
+  if (known) return known
+  const rows = rowCells(result)
+  const width = Math.max(result.headers.length, ...rows.map((row) => row.length), 0)
+  const numeric: boolean[] = []
+  let wide = 0
+  let longest = -1
+  for (let column = 0; column < width; column += 1) {
+    const cells = rows.map((row) => (row[column] ?? '').trim()).filter(Boolean)
+    const figures = cells.filter((cell) => cell.split(/\s+/).every((token) => FIGURE.test(token)))
+    const isNumeric = cells.length > 0 && figures.length >= cells.length * 0.6
+    numeric.push(isNumeric)
+    const mean = cells.length ? cells.reduce((sum, cell) => sum + cell.length, 0) / cells.length : 0
+    if (!isNumeric && mean > longest) {
+      longest = mean
+      wide = column
+    }
+  }
+  const profile = { numeric, wide }
+  PROFILES.set(result, profile)
+  return profile
 }
 
 /** A column's class, which caps how wide its cells may grow. */
 function columnClass(result: OcrResult, index: number): ColumnClass {
-  if (columnIsNumeric(result, index)) return 'num'
-  return index === wideIndex(result) ? 'col--wide' : 'col--text'
+  const { numeric, wide } = profileOf(result)
+  if (numeric[index]) return 'num'
+  return index === wide ? 'col--wide' : 'col--text'
 }
 
 type ColumnClass = 'num' | 'col--text' | 'col--wide'
@@ -104,12 +132,16 @@ export function FieldsView({
   pages,
   currentPage = 0,
   onEditPage,
+  onRemoveRowPage,
+  removed = 0,
   onOpenPage,
 }: FieldsViewProps) {
   const { headers } = toPublicJson(result)
   const pageRowCount = rowCells(result).length
 
   const [query, setQuery] = useState('')
+  // The row waiting on an answer: removing it is not something to do by accident.
+  const [removing, setRemoving] = useState<{ page: number; row: number } | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   // A long document is read a screenful at a time; the rest is one click away.
   const [expanded, setExpanded] = useState(false)
@@ -192,6 +224,21 @@ export function FieldsView({
         </div>
       )}
 
+      {onRemoveRowPage && (
+        <ConfirmDialog
+          open={removing !== null}
+          title={removing ? `Remove row ${removing.row + 1}${acrossPages ? ` of page ${removing.page + 1}` : ''}?` : ''}
+          confirmLabel="Remove row"
+          onCancel={() => setRemoving(null)}
+          onConfirm={() => {
+            if (removing) onRemoveRowPage(removing.page, removing.row)
+            setRemoving(null)
+          }}
+        >
+          <p>It leaves the table and every export. Reset edits &amp; rows brings back the rows removed from this page.</p>
+        </ConfirmDialog>
+      )}
+
       {/* Search on the left, ticket title on the right. */}
       <div className="table-controls">
         <div className="table-controls__start">
@@ -262,14 +309,15 @@ export function FieldsView({
           <span className="count">
             {pageRowCount} rows
             {edited.size > 0 && ` · ${edited.size} edited`}
+            {removed > 0 && ` · ${removed} removed`}
           </span>
-          {edited.size > 0 && onResetEdits && (
+          {(edited.size > 0 || removed > 0) && onResetEdits && (
             <button type="button" className="btn btn--sm btn--subtle" onClick={onResetEdits}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                 <path d="M3 3v5h5" />
               </svg>
-              Reset edits
+              {removed > 0 ? 'Reset edits & rows' : 'Reset edits'}
             </button>
           )}
         </div>
@@ -283,7 +331,7 @@ export function FieldsView({
       )}
 
       {scope.length === 0 ? (
-        <p className="column__empty">{EMPTY[result.kind]}</p>
+        <p className="column__empty">{EMPTY}</p>
       ) : filteredRows.length === 0 ? (
         <div className="empty-filter-state">
           <p>
@@ -312,17 +360,16 @@ export function FieldsView({
                 const { page, index: originalIndex, confidence, label } = row
                 const own = page.result
                 const ownHeaders = own.headers
-                const wide = wideIndex(own)
                 const complete = row.cells.every((cell) => cell.trim() !== '')
                 const tone =
                   row.edited && complete
                     ? 'fields__row--edited'
                     : row.flagged
                       ? 'fields__row--flagged'
-                      : row.solved || confidence < reviewThreshold
+                      : confidence < reviewThreshold
                         ? 'fields__row--low'
                         : ''
-                const total = /^totals?$/i.test(row.cells[wide] ?? '') ? 'fields__row--total' : ''
+                const total = row.total ? 'fields__row--total' : ''
                 const className =
                   [tone, total, label ? 'fields__row--label' : ''].filter(Boolean).join(' ') ||
                   undefined
@@ -363,7 +410,26 @@ export function FieldsView({
                         </td>
                       )}
                       <td className="num td--seq" title={`Row ${originalIndex + 1}`}>
-                        {originalIndex + 1}
+                        <span className="seq__number">{originalIndex + 1}</span>
+                        {onRemoveRowPage && (
+                          <button
+                            type="button"
+                            className="seq__remove"
+                            onClick={() => setRemoving({ page: page.index, row: originalIndex })}
+                            title={`Remove row ${originalIndex + 1}`}
+                            aria-label={
+                              acrossPages
+                                ? `Remove row ${originalIndex + 1} of page ${page.index + 1}`
+                                : `Remove row ${originalIndex + 1}`
+                            }
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                              <path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                          </button>
+                        )}
                       </td>
                       {row.cells.map((cell, cellIndex) => {
                         const header = ownHeaders[cellIndex] ?? ''
@@ -425,11 +491,6 @@ export function FieldsView({
       )}
     </div>
   )
-}
-
-function isNumericHeader(header: string): boolean {
-  if (/part|upc|sku|desc|name|item/i.test(header)) return false
-  return /\b(qty|quantity|price|prc|amount|amt|ext|extended|total|pack)\b/i.test(header)
 }
 
 /* -------------------------------------------------------------------------- */

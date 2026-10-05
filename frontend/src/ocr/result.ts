@@ -46,6 +46,40 @@ export function withCell(
 }
 
 /**
+ * `result` without one row.
+ *
+ * The checks name rows by position, so those below the removed one move up
+ * with it, and a check that was about the removed row has nothing left to say.
+ */
+export function withoutRow(result: OcrResult, rowIndex: number): OcrResult {
+  const shift = (rows: readonly number[]) =>
+    rows.filter((row) => row !== rowIndex).map((row) => (row > rowIndex ? row - 1 : row))
+  const [own, ...rest] = result.tables
+  return {
+    ...result,
+    rows: result.rows.filter((_, index) => index !== rowIndex),
+    // The page's own table is the rows above, held a second time.
+    tables:
+      own && own.rows.length === result.rows.length
+        ? [{ ...own, rows: own.rows.filter((_, index) => index !== rowIndex) }, ...rest]
+        : result.tables,
+    validation: result.validation.flatMap((issue) => {
+      // An issue about no row in particular stays; one about only this row goes.
+      if (issue.rows.length === 0) return [issue]
+      const rows = shift(issue.rows)
+      return rows.length > 0 ? [{ ...issue, rows }] : []
+    }),
+  }
+}
+
+/** A set of row positions after the row at `rowIndex` is removed. */
+export function shiftedAfterRemoval(rows: ReadonlySet<number>, rowIndex: number): Set<number> {
+  return new Set(
+    [...rows].filter((row) => row !== rowIndex).map((row) => (row > rowIndex ? row - 1 : row)),
+  )
+}
+
+/**
  * The JSON shown in the app: one kind, and only that kind's columns, each row
  * keyed by the column header exactly as the page prints it.
  */
@@ -61,7 +95,7 @@ export function toPublicJson(result: OcrResult): {
     ...(title ? { title } : {}),
     headers,
     rows: rowCells(result).map((cells) =>
-      Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])),
+      Object.fromEntries(headers.map((header, index) => [header || `Column ${index + 1}`, cells[index] ?? ''])),
     ),
   }
 }

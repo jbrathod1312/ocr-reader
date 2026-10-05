@@ -1,7 +1,14 @@
 import type { RefObject } from 'react'
 
 import type { StageMap } from '../../lib/stage-state'
-import type { DocumentPage, ExportPage, ExtraTable, PageFailure } from '../../ocr/api'
+import type {
+  DocumentMode,
+  DocumentPage,
+  ExportPage,
+  ExtraTable,
+  PageFailure,
+  StatementSummary,
+} from '../../ocr/api'
 import type { OcrResult, WordBox } from '../../ocr/types'
 import type { PageRows } from '../../components/ResultView'
 
@@ -18,6 +25,8 @@ export interface PageRead {
    * reads as printed.
    */
   validated: ReadonlySet<number>
+  /** How many rows have been taken out of this page. */
+  removed: number
   /** The words the page was read from, for the viewer's text overlay. */
   words: readonly WordBox[]
 }
@@ -26,25 +35,17 @@ export const NO_EDITS: ReadonlySet<number> = new Set()
 export const NO_WORDS: readonly WordBox[] = []
 
 export function resultTitle(result: OcrResult): string {
-  if (result.title) return result.title
-  switch (result.kind) {
-    case 'inventory':
-      return 'Inventory Summary'
-    case 'settlements':
-      return 'Pack Settlements'
-    case 'invoice':
-      return 'Invoice Breakdown'
-    case 'table':
-      return 'Invoice'
-    default: {
-      const unreachable: never = result.kind
-      return unreachable
-    }
-  }
+  return result.title || 'Table'
 }
 
 /** The reading session the page layout renders. */
 export interface ReceiptSession {
+  /** What the user says the next file is: nothing here works it out. */
+  mode: DocumentMode
+  /** Choose the kind of document; whatever was uploaded is cleared. */
+  setMode: (mode: DocumentMode) => void
+  /** What a bank statement says about itself, when one was read. */
+  statement: StatementSummary | null
   stages: StageMap
   pages: ReadonlyMap<number, PageRead>
   pageErrors: ReadonlyMap<number, string>
@@ -63,6 +64,8 @@ export interface ReceiptSession {
   edited: ReadonlySet<number>
   /** Rows of the page on screen the user has accepted by hand. */
   validated: ReadonlySet<number>
+  /** How many rows of the page on screen have been removed. */
+  removed: number
   /** The words the page on screen was read from, for the text overlay. */
   words: readonly WordBox[]
   busy: boolean
@@ -77,6 +80,8 @@ export interface ReceiptSession {
   toggleTable: (key: string) => void
   onFile: (file: File) => Promise<void>
   onEditPage: (pageIndex: number, rowIndex: number, cellIndex: number, value: string) => void
+  /** Take a row out of a page, and so out of the export. */
+  onRemoveRowPage: (pageIndex: number, rowIndex: number) => void
   /** Accept every row of the page on screen that is still waiting on a look. */
   validateAll: () => void
   resetEdits: () => void

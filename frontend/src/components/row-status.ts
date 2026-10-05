@@ -28,14 +28,14 @@ export interface RowView {
   confidence: number
   /** Contradicts the page's own arithmetic, or could not be read. */
   flagged: boolean
-  /** Solved from TOTALS: known, just not read. */
-  solved: boolean
   /** Flagged, low confidence, or missing cells, and nobody has said otherwise. */
   review: boolean
   edited: boolean
   /** Accepted by hand, which settles a row the checks were unsure of. */
   validated: boolean
   label: boolean
+  /** The row that restates the columns' sums. */
+  total: boolean
 }
 
 /** Readings below this confidence are flagged for a human to check. */
@@ -58,14 +58,7 @@ function rowConfidences(result: OcrResult): number[] {
 
 export function rowViews(page: PageRows, reviewThreshold = REVIEW_THRESHOLD): RowView[] {
   const { result, edited, validated } = page
-  const issues = (solved: boolean) =>
-    new Set(
-      result.validation
-        .filter((issue) => (issue.code === 'inventory-solved') === solved)
-        .flatMap((issue) => issue.rows),
-    )
-  const flagged = issues(false)
-  const solved = issues(true)
+  const flagged = new Set(result.validation.flatMap((issue) => issue.rows))
   const confidences = rowConfidences(result)
   return rowCells(result).map((cells, index) => {
     const confidence = confidences[index] ?? 0
@@ -78,13 +71,13 @@ export function rowViews(page: PageRows, reviewThreshold = REVIEW_THRESHOLD): Ro
       cells,
       confidence,
       flagged: flagged.has(index),
-      solved: solved.has(index),
       // Accepting a row does not change what was read, only whether it is
       // still waiting on someone.
       review: unsure && !accepted,
       edited: edited.has(index),
       validated: accepted,
       label: isLabelRow(result, index),
+      total: result.rows[index]?.total === true,
     }
   })
 }

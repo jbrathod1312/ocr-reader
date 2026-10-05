@@ -38,6 +38,8 @@ class TableRow:
     confidence: float
     #: A line kept for what it says rather than for what it is worth.
     label: bool = False
+    #: The row that restates the columns' sums, found by arithmetic.
+    total: bool = False
 
 
 @dataclass(slots=True)
@@ -111,27 +113,6 @@ def _max(values: Iterable[float], default: float = -math.inf) -> float:
 
 def normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
-
-
-def is_lottery_header(headers: Sequence[str]) -> bool:
-    """A printed header this page is not a lottery ticket."""
-    norm = [normalize(header) for header in headers]
-
-    def has(pattern: str) -> bool:
-        return any(re.search(pattern, header) for header in norm)
-
-    inventory = (
-        has(r"^games?$")
-        and has(r"^name$")
-        and has(r"^int")
-        and has(r"^rec")
-        and has(r"^act")
-        and has(r"^set")
-    )
-    settlements = (has(r"gamepack") or (has(r"^game$") and has(r"pack"))) and (
-        has(r"datesettled") or has(r"settled") or has(r"^date$")
-    )
-    return inventory or settlements
 
 
 # --------------------------------------------------------------------------- #
@@ -887,7 +868,15 @@ def refine_bounds(
             # A field that only reaches a title says nothing about where that
             # column's own ink starts, and owning it would hide the gutter.
             if len(hits) == 1:
-                if starts_in_column(fields, printed, hits[0], char_width):
+                column = columns[hits[0]]
+                # An amount set flush with the right of its title belongs to
+                # that title even where it begins left of the column's edge: a
+                # bank statement's `Credit` amounts are wider than the word.
+                flush = (
+                    is_figure(join_words(fields))
+                    and abs(_max(w.right for w in fields) - column.right) <= char_width * 3
+                )
+                if flush or starts_in_column(fields, printed, hits[0], char_width):
                     owned[hits[0]].append(fields)
                 else:
                     strays.append(fields)
@@ -915,6 +904,22 @@ def refine_bounds(
                 out.append(None)
         return out
 
+    # A field under one title and clear of the column before it is that title's
+    # column's own, whatever side of the printed edge it starts. A UPC set left
+    # of its centred title is the case: its edge has to move out to the gutter,
+    # and it cannot while the field is counted as nobody's.
+    ends_before = [_max((w.right for f in fields_list for w in f), -math.inf) for fields_list in owned]
+    adopted: list[list[WordBox]] = []
+    for fields in strays:
+        hits = [i for i, column in enumerate(columns) if horizontal_overlap(fields, column) > 0]
+        if len(hits) != 1 or hits[0] == 0:
+            continue
+        before = ends_before[hits[0] - 1]
+        start = _min(w.x for w in fields)
+        if math.isfinite(before) and before + char_width * 1.5 <= start < printed[hits[0]]:
+            owned[hits[0]].append(fields)
+            adopted.append(fields)
+    strays = [fields for fields in strays if not any(fields is each for each in adopted)]
     kinds = kinds_of()
     # A short figure under a centred or left-set title can clear the title.
     for fields in strays:
@@ -1142,6 +1147,83 @@ def learn_layout(
     return TableLayout(bounds=bounds, profiles=profiles, char_width=char_width, items=list(items))
 
 
+def untitled_columns(
+    columns: Sequence[HeaderColumn], layout: TableLayout
+) -> list[HeaderColumn]:
+    """
+    `columns` with a column added for each block of ink the rows show left of
+    the first column of words, which has no title over it.
+
+    A title the recogniser did not read leaves its column with no edge, and the
+    column then merges into its neighbour: `374793 6 JUUL POD` in one cell where
+    the item, the quantity and the name were three. The rows still show where
+    the columns are — a stretch of clear space that no item row crosses — so
+    each block of ink before the first column of words that no title sits over
+    is a column of its own, named by its place since nothing says otherwise.
+    """
+    words_at = next(
+        (i for i, profile in enumerate(layout.profiles) if profile is not None and profile.kind == "text"),
+        None,
+    )
+    if words_at is None or words_at >= len(columns) or not layout.items:
+        return list(columns)
+    limit = columns[words_at].x
+    # How many item rows have ink at each pixel left of the words. A gutter is
+    # a run that all but a few rows leave clear: a starred row sets its mark
+    # closer to the quantity than the others do, and must not close the gap.
+    width = int(limit) + 1
+    inked = [0] * width
+    for line in layout.items:
+        row = [False] * width
+        for start, end in union_spans([(w.x, w.right) for w in line]):
+            for x in range(max(0, int(start)), min(width, int(end) + 1)):
+                row[x] = True
+        for x in range(width):
+            inked[x] += row[x]
+    allowed = math.floor(len(layout.items) * 0.1)
+    narrowest = layout.char_width * 0.6
+    blocks: list[list[float]] = []
+    x = 0
+    while x < width:
+        if inked[x] <= allowed:
+            x += 1
+            continue
+        start = x
+        gap_start = None
+        while x < width:
+            if inked[x] > allowed:
+                if gap_start is not None and x - gap_start >= narrowest:
+                    break
+                gap_start = None
+            elif gap_start is None:
+                gap_start = x
+            x += 1
+        end = gap_start if gap_start is not None and x - gap_start >= narrowest else x
+        blocks.append([float(start), float(end)])
+    slack = layout.char_width * 3
+    added: list[HeaderColumn] = []
+    for start, end in blocks:
+        if end > limit:
+            break
+        if any(c.x - slack <= end and start <= c.right + slack for c in columns):
+            continue
+        inside = [
+            w for line in layout.items for w in line if start <= w.x + w.width / 2 <= end
+        ]
+        # Only numbers and codes: a stretch of words is the start of the
+        # description, however much room there is in front of it.
+        if not inside or sum(1 for w in inside if re.search(r"\d", w.text)) < len(inside) * 0.8:
+            continue
+        added.append(HeaderColumn(label="", x=start, right=end))
+    if not added:
+        return list(columns)
+    merged = sorted([*columns, *added], key=lambda c: c.x)
+    for index, column in enumerate(merged):
+        if any(column is each for each in added):
+            column.label = ""
+    return merged
+
+
 def typical_gap(
     lines: Sequence[Sequence[WordBox]],
     layout: TableLayout,
@@ -1190,6 +1272,11 @@ def place_line(buckets: Sequence[Sequence[WordBox]], layout: TableLayout) -> str
         # too; `P.O.:` is a field label, and a label has no number in it.
         if profile is not None and profile.kind == "code" and not re.search(r"\d", text):
             return None
+        # A label ending in a colon is a label, however it was read: the
+        # recogniser takes the O of `P.O.:` for a zero as often as not, and a
+        # zero makes a label look like a code.
+        if text.endswith(":") and profile is not None and profile.kind != "text":
+            return None
         if profile is not None:
             start = _min(w.x for w in inked)
             end = _max(w.right for w in inked)
@@ -1236,8 +1323,13 @@ def combine_cells(above: Sequence[str], below: Sequence[str]) -> list[str]:
     return out
 
 
-def is_lead_in(cells: Sequence[str]) -> bool:
-    """An item name printed on its own line, above or below the quantities."""
+def is_lead_in(cells: Sequence[str], layout: TableLayout | None = None) -> bool:
+    """
+    An item name printed on its own line, above or below the quantities.
+
+    The name is in one of the first two columns, or in any column the rows have
+    shown to hold text: a bank statement's description is the third.
+    """
     filled = [(cell.strip(), index) for index, cell in enumerate(cells) if cell.strip()]
     if not filled or len(filled) > 2:
         return False
@@ -1245,7 +1337,22 @@ def is_lead_in(cells: Sequence[str]) -> bool:
         return False
     if any(re.match(r"^\$?[\d,]+\.\d{2}\b", text) for text, _ in filled):
         return False
-    return all(index <= 1 for _, index in filled)
+
+    def holds_words(index: int) -> bool:
+        if layout is None or index >= len(layout.profiles):
+            return False
+        profile = layout.profiles[index]
+        return profile is not None and profile.kind == "text"
+
+    return all(index <= 1 or holds_words(index) for _, index in filled)
+
+
+DATE_CELL = re.compile(r"\d{1,2}[/.-]\d{1,2}[/.-](?:\d{4}|\d{2})|\d{4}-\d{2}-\d{2}")
+
+#: `Viewing 1 - 67 of 67 transactions`: a pager, which counts rows and is not one.
+PAGER = re.compile(
+    r"\b(?:viewing|showing|displaying)\s+\d[\d,]*\s*(?:-|–|to)\s*\d[\d,]*\s+of\s+\d", re.I
+)
 
 
 def is_line_item(cells: Sequence[str]) -> bool:
@@ -1264,6 +1371,19 @@ def is_line_item(cells: Sequence[str]) -> bool:
     has_code = any(
         re.fullmatch(r"[A-Za-z0-9-]{4,24}", cell) and re.search(r"\d", cell) for cell in filled
     )
+    # A ledger line — a bank statement's — is a date and an amount.
+    has_date = any(DATE_CELL.fullmatch(cell) for cell in filled)
+    if has_date and has_money:
+        return True
+    # A named line with figures in two or more cells of its own: an order's
+    # `RIP IT RED ZONE  1.0000  $102.00  $102.00`, whose quantity has decimals
+    # and which prints no code. One figure is a total or a subtotal, not a line.
+    # `NET PRICE: $32,165.34   SHIP QTY: 981` is the page adding itself up: its
+    # cells are keys with their figures, and a key is not an item's name.
+    named = any(re.search(r"[A-Za-z]{2,}", cell) and not is_figure(cell) for cell in filled)
+    keyed = any(":" in cell for cell in filled)
+    if named and not keyed and sum(1 for cell in filled if is_figure(cell)) >= 2:
+        return True
     return (has_qty and (has_money or has_code)) or (has_money and has_code)
 
 
@@ -1296,8 +1416,36 @@ SUMMARY_KEY = re.compile(
 SUMMARY_TOTAL = re.compile(r"^(?:sub-?totals?|totals?|grand|balance|due)$", re.I)
 
 
+def fits_columns(cells: Sequence[str], layout: TableLayout) -> bool:
+    """
+    Whether a line's cells are the kind of thing the item rows keep in those columns.
+
+    A column of quantities holds figures and a column of names holds words. A
+    line with a label where the quantities go, or a count where the names go,
+    is the table's own totals and not another item — whatever the label says.
+    """
+    checked = fitted = 0
+    for index, cell in enumerate(cells):
+        text = cell.strip()
+        profile = layout.profiles[index] if index < len(layout.profiles) else None
+        if not text or profile is None:
+            continue
+        checked += 1
+        figure = is_figure(re.sub(r"\s*\*+$", "", text))
+        wordy = bool(re.search(r"[A-Za-z]{2,}", text))
+        if profile.kind == "figure":
+            fitted += figure or not wordy
+        elif profile.kind == "text":
+            fitted += wordy or not figure
+        else:
+            fitted += not wordy or bool(re.search(r"\d", text))
+    return checked == 0 or fitted >= checked * 0.75
+
+
 def is_summary(cells: Sequence[str], item: bool) -> bool:
     """A line of the totals block, or a category's subtotal within the table."""
+    if PAGER.search(" ".join(cells)):
+        return True
     words = [
         stripped
         for stripped in (
@@ -1442,6 +1590,12 @@ def read_column_tables(
         ]
         printed = column_bounds(columns) if titled else (list(guided[1]) if guided else [])
         layout = learn_layout(body, columns, printed, line_height, titled)
+        if titled:
+            widened = untitled_columns(columns, layout)
+            if len(widened) != len(columns):
+                columns = widened
+                printed = column_bounds(columns)
+                layout = learn_layout(body, columns, printed, line_height, titled)
         bounds = layout.bounds
         # One printed line below the last, and no further.
         reach = min(line_height * 1.5, typical_gap(body, layout, line_height) + line_height * 0.75)
@@ -1462,6 +1616,11 @@ def read_column_tables(
 
         previous_band = None
         lead_in: dict | None = None
+        in_totals = False
+        # Well past the usual gap between two item rows.
+        item_bands = [line_band(line) for line in layout.items]
+        item_gaps = [b.top - a.bottom for a, b in zip(item_bands, item_bands[1:])]
+        pitch = max(median([max(g, 0.0) for g in item_gaps]) * 2, line_height * 1.25)
 
         def drop_lead_in() -> None:
             nonlocal lead_in
@@ -1475,7 +1634,21 @@ def read_column_tables(
                 )
             lead_in = None
 
-        for line in body:
+        def nearer_next_item(at: int, band) -> bool:
+            """Whether the item after line `at` sits closer than the row before it."""
+            if not rows or previous_band is None or at + 1 >= len(body):
+                return False
+            following = body[at + 1]
+            following_cells = [
+                join_words(bucket)
+                for bucket in buckets_for_line(following, columns, bounds, line_height, titled)
+            ]
+            if not is_line_item(following_cells):
+                return False
+            ahead = line_band(following).top - band.bottom
+            return ahead < band.top - previous_band.bottom
+
+        for at, line in enumerate(body):
             read_cells, notes = without_stock_note(
                 [join_words(bucket) for bucket in buckets_for_line(line, columns, bounds, line_height, titled)]
             )
@@ -1495,6 +1668,16 @@ def read_column_tables(
                 log("repeated-header", cells, confidence, top, left)
                 continue
             if not any(cell.strip() for cell in cells):
+                continue
+            band = line_band(line)
+            if item and rows and at > 0 and not fits_columns(cells, layout):
+                # After the last item, past a gap the item rows never have, a
+                # line that does not fit the columns is the totals block; so is
+                # every such line that follows it.
+                if in_totals or band.top - line_band(body[at - 1]).bottom > pitch:
+                    in_totals = True
+            if in_totals and not fits_columns(cells, layout):
+                log("summary", cells, confidence, top, left)
                 continue
             if is_summary(cells, item):
                 log("summary", cells, confidence, top, left)
@@ -1526,7 +1709,13 @@ def read_column_tables(
                     drop_lead_in()
                     previous_band = None
                     continue
-                if follows and previous is not None and previous_band is not None and placed == "text":
+                if (
+                    follows
+                    and previous is not None
+                    and previous_band is not None
+                    and placed == "text"
+                    and not nearer_next_item(at, band)
+                ):
                     rows[-1] = append_wrap(previous, text_cells)
                     previous_band = type(band)(previous_band.top, max(previous_band.bottom, band.bottom))
                     continue
@@ -1535,7 +1724,7 @@ def read_column_tables(
                     rows.append(TableRow(cells=text_cells, confidence=confidence))
                     previous_band = band
                     continue
-                if placed == "text" and is_lead_in(text_cells):
+                if placed == "text" and is_lead_in(text_cells, layout):
                     close = lead_in is not None and band.top - lead_in["band"].bottom <= reach
                     if close and lead_in is not None:
                         lead_in = {

@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reader.assemble import OcrResult  # noqa: E402
 from reader.columns import SkippedLine, TableRow  # noqa: E402
-from reader.rows import InventoryRow, InvoiceField, SettlementRow  # noqa: E402
 from reader.export import (  # noqa: E402
     ExportPage,
     PageFailure,
@@ -37,24 +36,12 @@ HEADERS = ["QTY", "DESCRIPTION", "PRICE"]
 
 
 def table(headers, rows, *, kind="table", title=None, tables=None, skipped=None) -> OcrResult:
-    """
-    A reading of `kind`, with `rows` in whichever array that kind keeps them in.
-
-    `row_cells` reads the kind's own array — an inventory row has a `game`, a
-    settlement a `game_pack` — so a fixture that only filled `table_rows` would
-    export nothing for any other kind.
-    """
+    """A reading with `rows` under `headers`."""
     built = [TableRow(cells=list(cells), confidence=1.0) for cells in rows]
-    pad = lambda cells, n: list(cells) + [""] * max(0, n - len(cells))  # noqa: E731
     return OcrResult(
         kind=kind,
         title=title,
         headers=list(headers),
-        rows=[InventoryRow(*pad(cells, 6), 1.0) for cells in rows] if kind == "inventory" else [],
-        settlements=[SettlementRow(*pad(cells, 3), 1.0) for cells in rows]
-        if kind == "settlements"
-        else [],
-        fields=[InvoiceField(*pad(cells, 2), 1.0) for cells in rows] if kind == "invoice" else [],
         table_rows=built,
         tables=tables
         if tables is not None
