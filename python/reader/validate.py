@@ -1,24 +1,25 @@
 """
-Check a reading against the receipt's own arithmetic.
+Check a reading against the page's own arithmetic.
 
-Why these checks exist at all: what matters for a
-financial document is not a headline accuracy number but whether the reading
-can say *which* rows it got wrong, and these receipts restate their own
-contents — a totals row, a footer count, a section subtotal repeated in the
-header — so a misread digit contradicts something else on the same page.
+What matters for a financial document is not a headline accuracy number but
+whether the reading can say *which* rows it got wrong, and these pages restate
+their own contents — a totals row, a footer count, a figure printed twice — so
+a misread digit contradicts something else on the same page.
 
-Nothing here corrects a value that was read. The one exception is a count that
-was not read at all, which the TOTALS row can determine exactly.
+Nothing here knows what a column or a row is called. A totals row is the row
+whose figures equal the others' sums; a repeated figure is one under a label
+that is the same words however spelled. Nothing here corrects a value that was
+read; it only says where to look.
 """
 
 from __future__ import annotations
 
+import difflib
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Sequence
 
-from .rows import InventoryRow, InvoiceField, SettlementRow
 
 
 @dataclass(slots=True)
@@ -55,235 +56,175 @@ def count(text: str) -> int | None:
     return int(token)
 
 
-COLUMNS = ("int", "rec", "act", "set")
+def _number(text: str) -> int | None:
+    """A cell's figure as a whole number of hundredths, or None where it is not one."""
+    token = re.sub(r"[$,\s]", "", text.strip())
+    credit = bool(re.search(r"[cC]$", token))
+    body = token[:-1] if credit else token
+    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", body):
+        return None
+    value = math.floor(float(body) * 100 + 0.5)
+    return -value if credit else value
 
 
-def is_totals_row(row: InventoryRow) -> bool:
-    return bool(re.fullmatch(r"totals", row.name.strip(), re.I))
+def _column_title(labels: Sequence[str], column: int) -> str:
+    return labels[column] if column < len(labels) and labels[column] else f"column {column + 1}"
 
 
-def _column(row: InventoryRow, column: str) -> str:
-    return getattr(row, column)
+def find_totals_row(cells: Sequence[Sequence[str]]) -> tuple[int, list[int]] | None:
+    """
+    The row that is the table's own totals, found by arithmetic.
+
+    A line of totals restates each column's sum, so it is the row whose figures
+    equal the sums of the other rows' in at least two columns. Nothing about how
+    the row is labelled, or whether it is labelled at all, is looked at.
+    """
+    if len(cells) < 4:
+        return None
+    width = max(len(row) for row in cells)
+    values = [[_number(row[c]) if c < len(row) else None for c in range(width)] for row in cells]
+    best: tuple[int, list[int]] | None = None
+    for r in range(len(cells)):
+        matched = []
+        for c in range(width):
+            stated = values[r][c]
+            others = [values[i][c] for i in range(len(cells)) if i != r]
+            if stated is None or not others or any(v is None for v in others if v is not None) or sum(v is not None for v in others) < len(others) * 0.6:
+                continue
+            if stated == sum(v for v in others if v is not None):
+                matched.append(c)
+        if len(matched) >= 2 and (best is None or len(matched) > len(best[1])):
+            best = (r, matched)
+    return best
 
 
-def validate_inventory(rows: Sequence[InventoryRow]) -> list[ValidationIssue]:
-    """Inventory: the TOTALS row restates each column's sum."""
-    totals = next((index for index, row in enumerate(rows) if is_totals_row(row)), -1)
-    if totals == -1:
+def validate_totals(cells: Sequence[Sequence[str]], labels: Sequence[str]) -> list[ValidationIssue]:
+    """The totals row, where there is one, restates each column's sum: say where it does not."""
+    found = find_totals_row(cells)
+    if found is None:
         return []
-    totals_row = rows[totals]
-
+    row, _ = found
+    width = max(len(r) for r in cells)
     issues: list[ValidationIssue] = []
-    for column in COLUMNS:
-        stated = count(_column(totals_row, column))
-        if stated is None:
+    for c in range(width):
+        stated = _number(cells[row][c]) if c < len(cells[row]) else None
+        column = [(i, _number(r[c]) if c < len(r) else None) for i, r in enumerate(cells) if i != row]
+        figures = [v for _, v in column if v is not None]
+        # A column that is not made of figures has no sum to restate.
+        if stated is None or len(figures) < len(column) * 0.6 or not figures:
             continue
-        total = 0
-        unreadable: list[int] = []
-        for index, row in enumerate(rows):
-            if index == totals:
-                continue
-            value = count(_column(row, column))
-            if value is None:
-                unreadable.append(index)
-            else:
-                total += value
-        if total == stated:
+        unread = [i for i, v in column if v is None]
+        if sum(figures) == stated:
             continue
-        blame = (
-            f" {len(unreadable)} row{'' if len(unreadable) == 1 else 's'} had no readable"
-            f" {column} count."
-            if unreadable
-            else ""
-        )
+        whole = all(v % 100 == 0 for v in [*figures, stated])
+        show = (lambda v: str(v // 100)) if whole else money
         issues.append(
             ValidationIssue(
-                code="inventory-totals",
+                code="table-totals",
                 message=(
-                    f"The {column} column adds up to {total}, but the TOTALS row says"
-                    f" {stated}.{blame}"
+                    f"{_column_title(labels, c).capitalize()} adds up to {show(sum(figures))}, but the "
+                    f"totals row says {show(stated)}."
+                    + (f" {len(unread)} row{'' if len(unread) == 1 else 's'} had no readable figure." if unread else "")
                 ),
-                rows=unreadable if unreadable else [totals],
+                rows=unread if unread else [row],
             )
         )
     return issues
 
 
-def solve_inventory_counts(
-    rows: Sequence[InventoryRow],
-) -> tuple[list[InventoryRow], list[ValidationIssue]]:
-    """Fill counts the reader could not produce, where the TOTALS row allows it."""
-    out = [replace(row) for row in rows]
-    issues: list[ValidationIssue] = []
-    totals = next((index for index, row in enumerate(out) if is_totals_row(row)), -1)
-    totals_row = out[totals] if totals != -1 else None
+def validate_count(rows: int, stated: int | None) -> list[ValidationIssue]:
+    """
+    A count a page states under its rows, held against the rows read.
 
-    def label(row: InventoryRow) -> str:
-        return f"game {row.game}" if row.game else (row.name or "a row")
-
-    if totals_row is not None:
-        for column in COLUMNS:
-            stated = count(_column(totals_row, column))
-            if stated is None:
-                continue
-            total = 0
-            unknown: list[int] = []
-            for index, row in enumerate(out):
-                if index == totals:
-                    continue
-                value = count(_column(row, column))
-                if value is None:
-                    unknown.append(index)
-                else:
-                    total += value
-            target = out[unknown[0]] if len(unknown) == 1 else None
-            solved = stated - total
-            if target is None or solved < 0 or solved > 999:
-                continue
-            read = _column(target, column)
-            setattr(target, column, str(solved).rjust(3, "0"))
-            issues.append(
-                ValidationIssue(
-                    code="inventory-solved",
-                    message=(
-                        f"The {column} count for {label(target)} was "
-                        + (f'read as "{read}"' if read else "not read")
-                        + f"; it is {_column(target, column)} from the TOTALS row."
-                    ),
-                    rows=[unknown[0]],
-                )
-            )
-
-    unread = [
-        (index, row)
-        for index, row in enumerate(out)
-        if any(count(_column(row, column)) is None for column in COLUMNS)
+    A figure at the foot of a page might be anything — a page number, a store —
+    so it is taken for the count only when it could be one: not far from the
+    number of rows.
+    """
+    if stated is None or rows == stated or not rows * 0.5 <= stated <= max(rows * 3, 3):
+        return []
+    missing = stated - rows
+    tail = f" — {missing} row{' is' if missing == 1 else 's are'} missing" if missing > 0 else ""
+    return [
+        ValidationIssue(
+            code="table-count",
+            message=f"The page states {stated} but {rows} rows were read{tail}.",
+            rows=[],
+        )
     ]
-    if unread:
-        issues.append(
-            ValidationIssue(
-                code="inventory-unread",
-                message=(
-                    "Counts could not be read for "
-                    + ", ".join(label(row) for _, row in unread)
-                    + ". Check these against the ticket before using the report."
-                ),
-                rows=[index for index, _ in unread],
-            )
-        )
-    return out, issues
-
-
-def validate_settlements(
-    rows: Sequence[SettlementRow],
-    stated_total: int | None,
-) -> list[ValidationIssue]:
-    """Settlements: the footer states how many packs were settled."""
-    issues: list[ValidationIssue] = []
-    if stated_total is not None and len(rows) != stated_total:
-        missing = stated_total - len(rows)
-        tail = (
-            f" — {missing} row{' is' if missing == 1 else 's are'} missing" if missing > 0 else ""
-        )
-        issues.append(
-            ValidationIssue(
-                code="settlements-count",
-                message=(
-                    f"The receipt settles {stated_total} packs but {len(rows)} rows were read{tail}."
-                ),
-                rows=[],
-            )
-        )
-
-    unread = [
-        (index, row)
-        for index, row in enumerate(rows)
-        if not row.game_pack or not row.name or not row.date_settled
-    ]
-    if unread:
-        labels = [row.game_pack or row.name or f"row {index + 1}" for index, row in unread]
-        issues.append(
-            ValidationIssue(
-                code="settlements-unread",
-                message=(
-                    f"Part of {', '.join(labels)} could not be read. "
-                    "Check these against the ticket before using the report."
-                ),
-                rows=[index for index, _ in unread],
-            )
-        )
-    return issues
 
 
 def _key(label: str) -> str:
     return re.sub(r"[^a-z0-9]", "", label.lower())
 
 
-def find_field(fields: Sequence[InvoiceField], label: str) -> tuple[int, InvoiceField] | None:
-    """Find a field by label, ignoring case, spacing and the reader's punctuation."""
-    want = _key(label)
-    for index, field in enumerate(fields):
-        if _key(field.label) == want:
-            return index, field
-    return None
+def _similar(a: str, b: str) -> bool:
+    """Two labels that are the same words, however the reader spelled them."""
+    ka, kb = _key(a), _key(b)
+    if min(len(ka), len(kb)) < 6:
+        return False
+    return difflib.SequenceMatcher(None, ka, kb).ratio() >= 0.82
 
 
-HEADER_PARTS = (
-    "FWD BALANCE",
-    "ON-LINE NET DUE",
-    "INSTANT NET DUE",
-    "NON-GAME ADJUSTMENTS",
-    "SYSTEM FEE",
-    "OTHER RETAILER INCENTIVES",
-)
+def _one_digit_apart(x: int, y: int) -> bool:
+    """Two amounts that differ in exactly one digit: the mark of a digit misread."""
+    a, b = str(abs(x)), str(abs(y))
+    # Under ten dollars, one digit apart is nothing: `0.04` and `0.00` differ by one.
+    return len(a) >= 4 and len(a) == len(b) and sum(c != d for c, d in zip(a, b)) == 1
 
 
-def validate_invoice(fields: Sequence[InvoiceField]) -> list[ValidationIssue]:
-    """Invoice: the header block totals itself, and each section restates its figure."""
+def validate_pairs(pairs: Sequence[tuple[str, str]]) -> list[ValidationIssue]:
+    """
+    A list of figures held to its own arithmetic, without knowing what any is called.
+
+    Two things a page of figures says about itself:
+
+    * a figure printed twice — the same label, the same words however spelled —
+      is the same figure, so two that differ in a single digit are one misread;
+    * a line that is the total of those above it adds them up, so a total one
+      digit away from their sum is a misread of the total or of an addend.
+
+    A repeated label whose figures differ a lot is a different figure that
+    happens to share a name, and is left alone.
+    """
     issues: list[ValidationIssue] = []
+    amounts = [_number(value) for _, value in pairs]
 
-    total = find_field(fields, "TOTAL DUE BY WED")
-    if total is not None:
-        found = [hit for hit in (find_field(fields, label) for label in HEADER_PARTS) if hit]
-        stated = cents(total[1].value)
-        addends = [cents(field.value) for _, field in found]
-        # Only meaningful with the whole block read.
-        if stated is not None and len(found) == len(HEADER_PARTS) and all(v is not None for v in addends):
-            total_sum = sum(value or 0 for value in addends)
-            if total_sum != stated:
+    for first in range(len(pairs)):
+        for second in range(first + 1, len(pairs)):
+            top, bottom = amounts[first], amounts[second]
+            if top is None or bottom is None or not _similar(pairs[first][0], pairs[second][0]):
+                continue
+            if top != bottom and _one_digit_apart(top, bottom):
                 issues.append(
                     ValidationIssue(
-                        code="invoice-total",
+                        code="table-repeated",
                         message=(
-                            f"The header lines add up to {money(total_sum)}, but TOTAL DUE BY WED"
-                            f" says {money(stated)}."
+                            f"{pairs[first][0]} is {money(top)} at the top of the page but "
+                            f"{pairs[second][0]} is {money(bottom)} further down; one of them "
+                            "was misread."
                         ),
-                        rows=[index for index, _ in found] + [total[0]],
+                        rows=[first, second],
                     )
                 )
 
-    for header, footer in (
-        ("ON-LINE NET DUE", "On-line Net Due"),
-        ("INSTANT NET DUE", "Instant Net Due"),
-    ):
-        want = _key(header)
-        keys = [_key(field.label) for field in fields]
-        first = keys.index(want) if want in keys else -1
-        last = len(keys) - 1 - keys[::-1].index(want) if want in keys else -1
-        if first == -1 or last == -1 or first == last:
-            continue
-        top = cents(fields[first].value)
-        bottom = cents(fields[last].value)
-        if top is None or bottom is None or top == bottom:
-            continue
-        issues.append(
-            ValidationIssue(
-                code="invoice-section-total",
-                message=(
-                    f"{header} is {money(top)} at the top of the page but {footer} is"
-                    f" {money(bottom)} at the foot of its section."
-                ),
-                rows=[first, last],
-            )
-        )
+    reported: set[int] = set()
+    for start in range(0, 3):
+        for end in range(start + 3, min(len(pairs), 15)):
+            addends = amounts[start:end]
+            total = amounts[end]
+            if end in reported or total is None or any(value is None for value in addends):
+                continue
+            added = sum(value or 0 for value in addends)
+            if added > 0 and added != total and _one_digit_apart(added, total):
+                reported.add(end)
+                issues.append(
+                    ValidationIssue(
+                        code="table-sum",
+                        message=(
+                            f"The {end - start} lines above {pairs[end][0]} add up to "
+                            f"{money(added)}, but it says {money(total)}."
+                        ),
+                        rows=list(range(start, end + 1)),
+                    )
+                )
     return issues

@@ -35,18 +35,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reader.assemble import row_cells  # noqa: E402
 from reader.bank.statement import read_statement  # noqa: E402
 from reader.document import read_document  # noqa: E402
+from reader.lottery.reader import read_lottery  # noqa: E402
 
 CORPUS = Path(__file__).resolve().parents[1] / "frontend" / "tools" / "corpus"
 #: Bank statements are read by their own reader, because the user says they are
 #: statements: documents in this folder go to it, the rest to the general one.
 BANK = CORPUS / "bank"
+#: The lottery's papers likewise. Many are photographs, which need the
+#: recogniser, so it is loaded only when one is read.
+LOTTERY = CORPUS / "lottery"
 SUFFIXES = (".pdf", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff")
 
 #: How many changed lines to print before saying how many more there are.
 MOST = 40
 
 
-def snapshot(path: Path, bank: bool = False) -> list[str]:
+def _recogniser():
+    """The recogniser, which loads its models only here, for a photograph."""
+    import serve
+
+    return serve._recognise
+
+
+def snapshot(path: Path, kind: str = "receipt") -> list[str]:
     """
     The reading as lines of text, one row per line.
 
@@ -57,9 +68,11 @@ def snapshot(path: Path, bank: bool = False) -> list[str]:
     than the one line that changed.
     """
     out: list[str] = []
-    if bank:
+    if kind == "bank":
         readings, summary = read_statement(path.read_bytes())
         out.append("statement  " + " | ".join(f"{k}={v}" for k, v in summary.items()))
+    elif kind == "lottery":
+        readings = read_lottery(path.read_bytes(), _recogniser())
     else:
         readings = read_document(path.read_bytes())
     for reading in readings:
@@ -86,15 +99,19 @@ def main() -> int:
             else []
         )
 
-    documents = [(p, False) for p in listed(CORPUS)] + [(p, True) for p in listed(BANK)]
+    documents = (
+        [(p, "receipt") for p in listed(CORPUS)]
+        + [(p, "lottery") for p in listed(LOTTERY)]
+        + [(p, "bank") for p in listed(BANK)]
+    )
     if not documents:
         print(f"no documents in {CORPUS} — drop some in and run this again")
         return 0
 
     update = bool(os.environ.get("UPDATE_CORPUS"))
     moved = 0
-    for document, bank in documents:
-        taken = snapshot(document, bank)
+    for document, kind in documents:
+        taken = snapshot(document, kind)
         recorded = document.parent / f"{document.name}.snap.txt"
         if update or not recorded.exists():
             recorded.write_text("\n".join(taken) + "\n")

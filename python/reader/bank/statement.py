@@ -258,9 +258,6 @@ def _result(
         kind="table",
         title=TITLE,
         headers=list(labels) if columns else [],
-        rows=[],
-        settlements=[],
-        fields=[],
         table_rows=table_rows,
         tables=[
             {

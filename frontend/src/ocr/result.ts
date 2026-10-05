@@ -95,7 +95,7 @@ export function toPublicJson(result: OcrResult): {
     ...(title ? { title } : {}),
     headers,
     rows: rowCells(result).map((cells) =>
-      Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])),
+      Object.fromEntries(headers.map((header, index) => [header || `Column ${index + 1}`, cells[index] ?? ''])),
     ),
   }
 }

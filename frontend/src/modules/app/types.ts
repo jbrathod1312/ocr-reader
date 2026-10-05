@@ -35,21 +35,7 @@ export const NO_EDITS: ReadonlySet<number> = new Set()
 export const NO_WORDS: readonly WordBox[] = []
 
 export function resultTitle(result: OcrResult): string {
-  if (result.title) return result.title
-  switch (result.kind) {
-    case 'inventory':
-      return 'Inventory Summary'
-    case 'settlements':
-      return 'Pack Settlements'
-    case 'invoice':
-      return 'Invoice Breakdown'
-    case 'table':
-      return 'Invoice'
-    default: {
-      const unreachable: never = result.kind
-      return unreachable
-    }
-  }
+  return result.title || 'Table'
 }
 
 /** The reading session the page layout renders. */

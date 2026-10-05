@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from ..boxes import WordBox, group_into_lines, line_band, median
-from ..rows import restore_date_digits
+from ..dates import restore_date_digits
 from .money import is_money
 
 #: A date as a statement prints it: `09/30/2026`, `9-30-26`, `2026-09-30`.

@@ -40,10 +40,11 @@ export interface ExtraTable {
 }
 
 /**
- * What the user says the document is. The reader never guesses: a bank
- * statement is read by its own reader, on its own route.
+ * What the user says the document is. The reader never guesses: the lottery's
+ * papers and bank statements are each read by a reader of their own, on their
+ * own route, and anything else is read as a table.
  */
-export type DocumentMode = 'receipt' | 'bank'
+export type DocumentMode = 'receipt' | 'lottery' | 'bank'
 
 /** What a bank statement says about itself, and whether its rows agree. */
 export interface StatementSummary {
@@ -173,7 +174,11 @@ async function isPdf(file: Blob): Promise<boolean> {
 }
 
 /** The route that reads each kind of document. */
-const ROUTE: Record<DocumentMode, string> = { receipt: '/document', bank: '/bank' }
+const ROUTE: Record<DocumentMode, string> = {
+  receipt: '/document',
+  lottery: '/lottery',
+  bank: '/bank',
+}
 
 /** Read one file — a PDF or an image — and return every page of it. */
 export async function readDocument(

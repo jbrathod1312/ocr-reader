@@ -55,11 +55,17 @@ def _guide_from(result: OcrResult) -> ColumnGuide | None:
     return ColumnGuide(headers=list(result.headers), bounds=list(result.column_bounds))
 
 
+#: What turns a page's words into its reading. The general reader's by default;
+#: the lottery's papers and bank statements are read by their own.
+Assemble = Callable[[Sequence[WordBox], float, "ColumnGuide | None"], OcrResult]
+
+
 def read_document(
     data: bytes,
     recognise: Recogniser | None = None,
     dpi: int = DPI,
     row_overlap_ratio: float = 0.5,
+    assemble: Assemble = assemble_receipt,
 ) -> list[PageReading]:
     """
     Every page of `data`, read.
@@ -70,9 +76,9 @@ def read_document(
     worth having.
     """
     readings = (
-        _read_pdf_document(data, recognise, dpi, row_overlap_ratio)
+        _read_pdf_document(data, recognise, dpi, row_overlap_ratio, assemble)
         if looks_like_pdf(data)
-        else _read_image(data, recognise, row_overlap_ratio)
+        else _read_image(data, recognise, row_overlap_ratio, assemble)
     )
     # Last, and over the whole document: what a leftover line is often shows
     # only beside the other pages. See `skipped.refine`.
@@ -94,6 +100,7 @@ def _read_pdf_document(
     recognise: Recogniser | None,
     dpi: int,
     row_overlap_ratio: float,
+    assemble: Assemble,
 ) -> list[PageReading]:
     readings: list[PageReading] = []
     guide: ColumnGuide | None = None
@@ -108,7 +115,7 @@ def _read_pdf_document(
         else:
             words = []
             reader = "none"
-        result = assemble_receipt(words, row_overlap_ratio, guide)
+        result = assemble(words, row_overlap_ratio, guide)
         guide = _guide_from(result) or guide
         if reader == "none":
             result.warnings.append(
@@ -149,11 +156,12 @@ def _read_image(
     data: bytes,
     recognise: Recogniser | None,
     row_overlap_ratio: float,
+    assemble: Assemble,
 ) -> list[PageReading]:
     pixels = load_image_pixels(data)
 
     words = merge_glyph_runs(recognise(pixels)) if recognise is not None else []
-    result = assemble_receipt(words, row_overlap_ratio, None)
+    result = assemble(words, row_overlap_ratio, None)
     if recognise is None:
         result.warnings.append("No recogniser is available to read this image.")
     return [
@@ -174,13 +182,7 @@ def _read_image(
 
 
 def _row_confidences(result: OcrResult) -> list[float]:
-    """Each row's mean word confidence, whichever kind of page this is."""
-    if result.kind == "inventory":
-        return [row.confidence for row in result.rows]
-    if result.kind == "settlements":
-        return [row.confidence for row in result.settlements]
-    if result.kind == "invoice":
-        return [field.confidence for field in result.fields]
+    """Each row's mean word confidence."""
     return [row.confidence for row in result.table_rows]
 
 
@@ -206,7 +208,8 @@ def _rows_json(result: OcrResult) -> list[dict]:
             {
                 "cells": padded,
                 "confidence": confidences[index] if index < len(confidences) else 1.0,
-                **({"label": True} if result.kind == "table" and result.table_rows[index].label else {}),
+                **({"label": True} if result.table_rows[index].label else {}),
+                **({"total": True} if result.table_rows[index].total else {}),
             }
         )
     return out

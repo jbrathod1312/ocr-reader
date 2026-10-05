@@ -78,14 +78,11 @@ describe('rowViews', () => {
       { cells: ['2', 'LEAF BAG', '17.35'] },
     ])
     result.validation = [
-      { code: 'inventory-totals', message: 'the int column does not add up', rows: [1] },
-      { code: 'inventory-solved', message: 'solved from TOTALS', rows: [0] },
+      { code: 'table-totals', message: 'a column does not add up', rows: [1] },
     ]
     const rows = rowViews(page(result))
     expect(rows.map((row) => row.flagged)).toEqual([false, true])
-    expect(rows.map((row) => row.solved)).toEqual([true, false])
-    // Solved is not flagged: the count is known, it just was not read.
-    expect(rows[0]!.review).toBe(false)
+    expect(rows.map((row) => row.review)).toEqual([false, true])
   })
 
   it('settles a flagged row once somebody accepts it', () => {

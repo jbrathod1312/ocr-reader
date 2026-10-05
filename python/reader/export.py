@@ -185,7 +185,7 @@ def headers_of(page: "ExportPage") -> list[str]:
     """
     width = max([len(page.headers)] + [len(row) for row in page.rows])
     return [
-        page.headers[index] if index < len(page.headers) else f"Column {index + 1}"
+        (page.headers[index] if index < len(page.headers) else "") or f"Column {index + 1}"
         for index in range(width)
     ]
 

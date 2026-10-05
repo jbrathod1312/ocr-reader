@@ -12,7 +12,7 @@ server differs from the command-line script.
   a multipart form, and not a third-party cloud service. The server tells a
   PDF from an image by looking at the first five bytes.
 - The server is **`python/serve.py`** (default **127.0.0.1:8756**). In dev,
-  Vite proxies `/document`, `/bank`, `/export`, `/page` and `/health` to that port.
+  Vite proxies `/document`, `/lottery`, `/bank`, `/export`, `/page` and `/health` to that port.
 - **There is no fallback.** Without the reader the app says so and reads
   nothing: the browser has no reader of its own any more.
 - **`read_receipt.py`** is the PP-OCR engine. `serve.py` imports it; it also
@@ -25,6 +25,7 @@ server differs from the command-line script.
 | Route            | What it is for                                                                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /document` | A PDF or an image in; every page's reading out. `?format=csv` or `?format=json` returns the finished export instead, for a caller with nothing to edit. |
+| `POST /lottery`  | A lottery page in; the same shape out as `/document`. Read by `reader/lottery/`, which assumes no layout. |
 | `POST /bank`     | A bank statement in; the same shape out as `/document`, plus a `statement` summary. Read by `reader/bank/`, not by the general reader. |
 | `POST /export`   | The pages a caller holds, back as one CSV or JSON.                                                                                                      |
 | `GET /page`      | The picture of one page of a PDF just read, at the width asked for.                                                                                     |
@@ -42,6 +43,55 @@ presents it as `Authorization: Bearer <key>`; a browser opens the app once as
 `/?key=<key>` and the reader moves it into an HttpOnly cookie and redirects to
 the clean URL. The cookie is what makes the viewer work — `<img src="/page…">`
 cannot carry a header. `/health` is the one route that never asks.
+
+### Three readers, chosen by the user
+
+The app has a "Document type" choice above the viewer, and the choice picks the
+route. Nothing works out what a document is:
+
+| Choice | Route | Reader |
+| --- | --- | --- |
+| Receipt / invoice | `/document` | `reader/assemble.py` — the tables printed on a page, and nothing else. A page with no table is an empty table. |
+| Lottery | `/lottery` | `reader/lottery/` — the table a lottery page holds, found from where its figures sit and checked against its own arithmetic. Assumes no layout, columns or titles. |
+| Bank statement | `/bank` | `reader/bank/` — see below. |
+
+The general reader used to try the lottery's three layouts as well, and a page
+that was not a table at all came back as an `inventory` with no rows. It no longer
+does: lottery pages are read by `reader/lottery/`, which has no layouts to try.
+`python/check_corpus.py` reads `frontend/tools/corpus/lottery/` and `bank/` with
+their own readers.
+
+### The lottery reader assumes nothing about the page
+
+It is not told that a page is an inventory, a list of settlements or an invoice,
+how many columns a table has, or what they are called. It finds the table the
+page holds and shows it; a page with its labels in another language, or none,
+reads the same.
+
+- **Rows** are found from the page's figures. Figures are clustered by where they
+  sit; a cluster that many words fall in is a column of figures, and a figure
+  belongs to it only if it is made of the same kinds of characters (a time is not
+  an amount). Each vertical position that has such a figure is a row.
+- **Columns** are the positions most rows line up on — where a word starts, or,
+  for right-aligned figures, where it ends. The number of columns is whatever the
+  rows show. A run of digits wide enough to span several columns is cut into
+  them; figures that drift sideways down a photograph go to the nearest column.
+- **Titles** are what the page prints directly over the columns, copied as
+  printed; a page that prints none has blank titles, and the export names those
+  columns by their place (`Column 3`). The page's **title** is the nearest line
+  above the table made of words, if the recogniser was sure of it.
+- **Repairs** are by shape only, and by what a column is made of: dots between
+  groups of three are thousands, a letter in the middle of digits is a digit, `S`
+  before digits is `$` in a column that uses `$`, a misread date is put right in a
+  column of dates.
+- **Checks** are arithmetic. The totals row is the row whose figures equal the
+  other rows' sums in at least two columns; a count stated under the rows is held
+  against the rows read (only if it could be one); two figures under the same
+  label that differ by a single digit, or a total one digit off the lines above it,
+  are flagged.
+
+The result is always a table: nothing says what sort of document it is. The
+recogniser holds no lottery format either — it cuts a line only at whitespace.
 
 ### Bank statements
 
@@ -125,6 +175,7 @@ layer is a token has to be recognised, and only those pages pay for it.
 | `reader/validate.py` | Each receipt against its own arithmetic.                     |
 | `reader/assemble.py` | Which kind of page this is, and its reading.                 |
 | `reader/document.py` | A whole file in, every page's reading out.                   |
+| `reader/lottery/`    | The lottery's pages: rows and columns from the figures, checks. |
 | `reader/bank/`       | A bank statement: ledger, rows at dates, the running-balance checks. |
 | `reader/export.py`   | Every page as one CSV or JSON, tables and log beside it.     |
 | `reader/skipped.py`  | What a line the table reader left out actually is.           |

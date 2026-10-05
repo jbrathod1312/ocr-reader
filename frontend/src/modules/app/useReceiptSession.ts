@@ -51,7 +51,8 @@ const MODE_KEY = 'receipt-ocr:mode'
 /** The kind the user chose last time, so it does not have to be chosen again. */
 function storedMode(): DocumentMode {
   try {
-    return localStorage.getItem(MODE_KEY) === 'bank' ? 'bank' : 'receipt'
+    const saved = localStorage.getItem(MODE_KEY)
+    return saved === 'bank' || saved === 'lottery' ? saved : 'receipt'
   } catch {
     return 'receipt'
   }
