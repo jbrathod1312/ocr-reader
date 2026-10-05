@@ -2403,3 +2403,76 @@ button {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* The row number is where a row is removed: no column of its own, since the
+   table shows only what the document prints. The bin takes the number's place
+   while the row is hovered or has focus. */
+.fields td.td--seq .seq__remove {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.fields tbody tr:hover td.td--seq .seq__remove,
+.fields td.td--seq .seq__remove:focus-visible {
+  display: flex;
+}
+
+.fields td.td--seq .seq__remove:hover,
+.fields td.td--seq .seq__remove:focus-visible {
+  color: var(--danger, #dc2626);
+}
+
+/* A modal question. The backdrop is the dialog's own, so the page behind stays put. */
+dialog.confirm {
+  width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+}
+
+dialog.confirm::backdrop {
+  background: rgb(15 23 42 / 0.45);
+}
+
+.confirm__body {
+  display: grid;
+  gap: 10px;
+  padding: 18px 20px;
+}
+
+.confirm__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.confirm__text {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.confirm__text p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}

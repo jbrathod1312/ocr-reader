@@ -9,6 +9,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
     result,
     edited,
     validated,
+    removed,
     pageError,
     busy,
     currentPage,
@@ -21,6 +22,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
     droppedTables,
     toggleTable,
     onEditPage,
+    onRemoveRowPage,
     validateAll,
     resetEdits,
     switchPdfPage,
@@ -92,6 +94,8 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
               pages={tablePages}
               currentPage={currentPage}
               onEditPage={onEditPage}
+              onRemoveRowPage={onRemoveRowPage}
+              removed={removed}
               onOpenPage={isPdfMode ? switchPdfPage : undefined}
             />
           </div>

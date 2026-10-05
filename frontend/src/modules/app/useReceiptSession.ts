@@ -9,7 +9,7 @@ import {
   type ExtraTable,
   type PageFailure,
 } from '../../ocr/api'
-import { rowCells, withCell } from '../../ocr/result'
+import { rowCells, shiftedAfterRemoval, withCell, withoutRow } from '../../ocr/result'
 import type { ProgressEvent } from '../../ocr/types'
 import { NO_EDITS, NO_WORDS, type PageRead, type Phase, type ReceiptSession } from './types'
 
@@ -20,6 +20,7 @@ function freshRead(page: DocumentPage): PageRead {
     readResult: page.result,
     edited: NO_EDITS,
     validated: NO_EDITS,
+    removed: 0,
     words: page.words,
   }
 }
@@ -76,6 +77,7 @@ export function useReceiptSession(): ReceiptSession {
   const result = current?.result ?? null
   const edited = current?.edited ?? NO_EDITS
   const validated = current?.validated ?? NO_EDITS
+  const removed = current?.removed ?? 0
   const words = current?.words ?? NO_WORDS
 
   // Whether the reader is up, asked once at start-up so the dropzone can warn
@@ -182,6 +184,21 @@ export function useReceiptSession(): ReceiptSession {
     [],
   )
 
+  /** A row taken out is gone from the page's reading and from every export. */
+  const onRemoveRowPage = useCallback((pageIndex: number, rowIndex: number) => {
+    setPages((prev) => {
+      const page = prev.get(pageIndex)
+      if (!page || rowIndex < 0 || rowIndex >= page.result.rows.length) return prev
+      return new Map(prev).set(pageIndex, {
+        ...page,
+        result: withoutRow(page.result, rowIndex),
+        edited: shiftedAfterRemoval(page.edited, rowIndex),
+        validated: shiftedAfterRemoval(page.validated, rowIndex),
+        removed: page.removed + 1,
+      })
+    })
+  }, [])
+
   /**
    * Accept every row of the page on screen at once.
    *
@@ -207,6 +224,7 @@ export function useReceiptSession(): ReceiptSession {
         result: page.readResult,
         edited: NO_EDITS,
         validated: NO_EDITS,
+        removed: 0,
       })
     })
   }
@@ -300,6 +318,7 @@ export function useReceiptSession(): ReceiptSession {
     result,
     edited,
     validated,
+    removed,
     words,
     busy,
     pageError,
@@ -310,6 +329,7 @@ export function useReceiptSession(): ReceiptSession {
     toggleTable,
     onFile,
     onEditPage,
+    onRemoveRowPage,
     validateAll,
     resetEdits,
     cancel,

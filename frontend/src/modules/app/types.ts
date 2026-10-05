@@ -18,6 +18,8 @@ export interface PageRead {
    * reads as printed.
    */
   validated: ReadonlySet<number>
+  /** How many rows have been taken out of this page. */
+  removed: number
   /** The words the page was read from, for the viewer's text overlay. */
   words: readonly WordBox[]
 }
@@ -63,6 +65,8 @@ export interface ReceiptSession {
   edited: ReadonlySet<number>
   /** Rows of the page on screen the user has accepted by hand. */
   validated: ReadonlySet<number>
+  /** How many rows of the page on screen have been removed. */
+  removed: number
   /** The words the page on screen was read from, for the text overlay. */
   words: readonly WordBox[]
   busy: boolean
@@ -77,6 +81,8 @@ export interface ReceiptSession {
   toggleTable: (key: string) => void
   onFile: (file: File) => Promise<void>
   onEditPage: (pageIndex: number, rowIndex: number, cellIndex: number, value: string) => void
+  /** Take a row out of a page, and so out of the export. */
+  onRemoveRowPage: (pageIndex: number, rowIndex: number) => void
   /** Accept every row of the page on screen that is still waiting on a look. */
   validateAll: () => void
   resetEdits: () => void
