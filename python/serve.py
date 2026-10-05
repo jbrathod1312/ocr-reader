@@ -77,6 +77,7 @@ from read_receipt import (  # noqa: E402
 )
 from reader.bank.statement import read_statement  # noqa: E402
 from reader.boxes import WordBox  # noqa: E402
+from reader.glyphs import merge_glyph_runs, tighten_boxes  # noqa: E402
 from reader.document import document_json, looks_like_pdf, read_document  # noqa: E402
 from reader.lottery.reader import read_lottery  # noqa: E402
 from reader.export import (  # noqa: E402
@@ -595,7 +596,7 @@ class Handler(BaseHTTPRequestHandler):
 def _recognise(pixels) -> list:
     """The recogniser, as `reader.document` wants it: pixels in, words out."""
     page, _ratio = suppress_colored_watermark(pixels)
-    return [
+    words = [
         WordBox(
             text=word["text"],
             x=float(word["x"]),
@@ -606,6 +607,14 @@ def _recognise(pixels) -> list:
         )
         for word in read_words(engine(), page, scale=2.0, color=pixels)
     ]
+    # Glyphs the recogniser boxed one at a time are joined while their boxes
+    # still touch; then each word is cut to its own ink, so the gaps between
+    # words and between columns are real, as they are in a PDF.
+    return tighten_boxes(merge_glyph_runs(words), page)
+
+
+#: What `read_document` is told: this already joins glyphs, so it need not again.
+_recognise.glyphs_merged = True  # type: ignore[attr-defined]
 
 
 #: Widths `/page` will render. A request is rounded up to one of these, so a

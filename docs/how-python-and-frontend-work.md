@@ -44,6 +44,16 @@ presents it as `Authorization: Bearer <key>`; a browser opens the app once as
 the clean URL. The cookie is what makes the viewer work — `<img src="/page…">`
 cannot carry a header. `/health` is the one route that never asks.
 
+### A page as pixels reads like the same page as text
+
+A recogniser boxes a whole line and shares the box out among its words, so
+neighbouring words touch and the gaps that tell one column from the next are
+gone; a PDF's words have real gaps. After the glyphs are joined, each word's box
+is cut down to its own ink (`glyphs.tighten_boxes`), putting the gaps back, so the
+readers above see the same geometry either way. A blank run between two digits is
+a space only if it is wide (`DIGIT_GAP`): the digits of one number are spaced just
+over what separates two words.
+
 ### Three readers, chosen by the user
 
 The app has a "Document type" choice above the viewer, and the choice picks the
@@ -97,8 +107,8 @@ recogniser holds no lottery format either — it cuts a line only at whitespace.
 
 A statement is read by its own reader, on its own route, **because the user
 says it is one** — the app has a "Document type" choice above the viewer and
-nothing guesses. Changing it with a file loaded reads that file again as the
-new kind.
+nothing guesses. Changing it clears whatever was uploaded, which was read as the
+old kind.
 
 `reader/bank/` reads **no word for its meaning** — no title, no label, no
 "Viewing … of N", no `CR`/`DR`. Everything is shape, position or arithmetic, so a

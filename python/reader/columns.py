@@ -1220,7 +1220,7 @@ def untitled_columns(
     merged = sorted([*columns, *added], key=lambda c: c.x)
     for index, column in enumerate(merged):
         if any(column is each for each in added):
-            column.label = f"Column {index + 1}"
+            column.label = ""
     return merged
 
 

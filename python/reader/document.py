@@ -43,6 +43,14 @@ class PageReading:
     words: list[WordBox]
 
 
+def _recognised(recognise: Recogniser, pixels) -> list[WordBox]:
+    """A page's words from the recogniser, with their glyphs joined."""
+    words = recognise(pixels)
+    # A recogniser that joins glyphs itself says so: it does so before it cuts
+    # each word to its ink, which this must not undo.
+    return words if getattr(recognise, "glyphs_merged", False) else merge_glyph_runs(words)
+
+
 def looks_like_pdf(data: bytes) -> bool:
     return data[:5] == b"%PDF-"
 
@@ -110,7 +118,7 @@ def _read_pdf_document(
             reader = "pdf text"
         elif recognise is not None:
             # The recogniser returns glyphs as often as words on this print.
-            words = merge_glyph_runs(recognise(render_page(data, page.number, dpi)))
+            words = _recognised(recognise, render_page(data, page.number, dpi))
             reader = "recogniser"
         else:
             words = []
@@ -160,7 +168,7 @@ def _read_image(
 ) -> list[PageReading]:
     pixels = load_image_pixels(data)
 
-    words = merge_glyph_runs(recognise(pixels)) if recognise is not None else []
+    words = _recognised(recognise, pixels) if recognise is not None else []
     result = assemble(words, row_overlap_ratio, None)
     if recognise is None:
         result.warnings.append("No recogniser is available to read this image.")

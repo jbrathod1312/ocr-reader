@@ -42,7 +42,7 @@ export function resultTitle(result: OcrResult): string {
 export interface ReceiptSession {
   /** What the user says the next file is: nothing here works it out. */
   mode: DocumentMode
-  /** Choose the kind of document; a file already loaded is read again as it. */
+  /** Choose the kind of document; whatever was uploaded is cleared. */
   setMode: (mode: DocumentMode) => void
   /** What a bank statement says about itself, when one was read. */
   statement: StatementSummary | null

@@ -17,7 +17,7 @@ interface DocumentModeToggleProps {
  *
  * The reader does not work this out. The choice picks which reader runs (the
  * general table reader, the lottery's, or the bank statement's), and
- * changing it with a file loaded reads that file again as the new kind.
+ * changing it clears whatever was uploaded, which was read as the old kind.
  */
 export function DocumentModeToggle({ mode, onChange, disabled = false }: DocumentModeToggleProps) {
   return (

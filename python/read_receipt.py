@@ -151,7 +151,7 @@ SPACE_GAP = 0.32
 
 def ink_gaps(
     page: np.ndarray, x0: int, y0: int, x1: int, y1: int
-) -> tuple[list[float], list[int]]:
+) -> tuple[list[float], list[int], list[float]]:
     """
     Word-sized blank runs inside a line box, and the glyphs between them.
 
@@ -165,12 +165,12 @@ def ink_gaps(
     x0, y0 = max(0, x0), max(0, y0)
     x1, y1 = min(width, x1), min(height, y1)
     if x1 - x0 < 2 or y1 - y0 < 2:
-        return [], []
+        return [], [], []
     ink = page[y0:y1, x0:x1] < INK_LEVEL
     inked = ink.any(axis=0)
     on = np.flatnonzero(inked)
     if len(on) < 2:
-        return [], []
+        return [], [], []
 
     # Cap height from the tall strokes, so a watermark speck above the line
     # does not inflate it and a dot or comma does not shrink it.
@@ -178,9 +178,10 @@ def ink_gaps(
     bottom = ink.shape[0] - 1 - ink[::-1].argmax(axis=0)
     cap = float(np.percentile((bottom - top + 1)[inked], 90))
     if cap <= 0:
-        return [], []
+        return [], [], []
 
     gaps: list[float] = []
+    widths: list[float] = []
     glyphs: list[int] = [0]
     run_start: int | None = int(on[0])
     for column in range(int(on[0]), int(on[-1]) + 1):
@@ -191,10 +192,17 @@ def ink_gaps(
         if run_start is not None:
             if column - run_start >= SPACE_GAP * cap:
                 gaps.append(x0 + (run_start + column) / 2)
+                widths.append((column - run_start) / cap)
                 glyphs.append(0)
             glyphs[-1] += 1
             run_start = None
-    return gaps, glyphs
+    return gaps, glyphs, widths
+
+
+#: Blank run, in cap heights, that cuts a number in two. Digits of one number are
+#: set with a little room between them, just over what splits two words; the gap
+#: between one numeric column and the next is a great deal wider.
+DIGIT_GAP = 0.5
 
 
 def restore_spaces(
@@ -202,6 +210,7 @@ def restore_spaces(
     spans: list[tuple[float, float]],
     gaps: list[float],
     glyphs: list[int] | None = None,
+    widths: list[float] | None = None,
 ) -> tuple[str, list[tuple[float, float]]]:
     """
     Put a space into `text` at each blank run the print shows.
@@ -220,6 +229,24 @@ def restore_spaces(
         return text, spans
 
     kept = [index for index, char in enumerate(text) if not char.isspace()]
+    if widths and glyphs and len(glyphs) == len(gaps) + 1 and all(glyphs) and sum(glyphs) == len(kept):
+        # A narrow gap between two digits is inside a number: join the two runs.
+        joined_gaps: list[float] = []
+        joined = [glyphs[0]]
+        cursor = glyphs[0]
+        for k, count in enumerate(glyphs[1:]):
+            inside_number = (
+                text[kept[cursor - 1]].isdigit() and text[kept[cursor]].isdigit() and widths[k] < DIGIT_GAP
+            )
+            if inside_number:
+                joined[-1] += count
+            else:
+                joined_gaps.append(gaps[k])
+                joined.append(count)
+            cursor += count
+        gaps, glyphs = joined_gaps, joined
+        if not gaps:
+            return text, spans
     if glyphs and len(glyphs) == len(gaps) + 1 and all(glyphs) and sum(glyphs) == len(kept):
         out_text: list[str] = []
         out_spans: list[tuple[float, float]] = []
@@ -522,8 +549,8 @@ def read_words(
                     text, spans = trimmed, kept
                     x0 = min(left for left, _ in spans)
                     x1 = max(right for _, right in spans)
-            gaps, glyphs = ink_gaps(grey, int(x0), int(y0), int(np.ceil(x1)), int(np.ceil(y1)))
-            text, spans = restore_spaces(text, spans, gaps, glyphs)
+            gaps, glyphs, widths = ink_gaps(grey, int(x0), int(y0), int(np.ceil(x1)), int(np.ceil(y1)))
+            text, spans = restore_spaces(text, spans, gaps, glyphs, widths)
             spans = [(left / scale, right / scale) for left, right in spans]
         lines.append((x0, y0, x1, y1, text, score, spans))
 

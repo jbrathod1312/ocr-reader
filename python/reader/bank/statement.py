@@ -22,8 +22,7 @@ from typing import Any, Sequence
 from ..assemble import OcrResult
 from ..boxes import WordBox, median
 from ..columns import SkippedLine, TableRow
-from ..document import PageReading, Recogniser, load_image_pixels, looks_like_pdf
-from ..glyphs import merge_glyph_runs
+from ..document import PageReading, Recogniser, _recognised, load_image_pixels, looks_like_pdf
 from ..pdf_text import DPI, read_pdf, render_page, text_layer_is_usable
 from .checks import Audit, Roles, Txn, audit, infer_roles, txn_from
 from .columns import Column, Group, cells_of, clean, induce_columns, make_groups, usable
@@ -45,7 +44,7 @@ class _Page:
 def _pages(data: bytes, recognise: Recogniser | None, dpi: int) -> list[_Page]:
     if not looks_like_pdf(data):
         pixels = load_image_pixels(data)
-        words = merge_glyph_runs(recognise(pixels)) if recognise is not None else []
+        words = _recognised(recognise, pixels) if recognise is not None else []
         return [
             _Page(1, int(pixels.shape[1]), int(pixels.shape[0]), "recogniser" if recognise else "none", words)
         ]
@@ -54,7 +53,7 @@ def _pages(data: bytes, recognise: Recogniser | None, dpi: int) -> list[_Page]:
         if text_layer_is_usable(page.words):
             words, reader = page.words, "pdf text"
         elif recognise is not None:
-            words = merge_glyph_runs(recognise(render_page(data, page.number, dpi)))
+            words = _recognised(recognise, render_page(data, page.number, dpi))
             reader = "recogniser"
         else:
             words, reader = [], "none"

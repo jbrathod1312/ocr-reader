@@ -16,7 +16,12 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import numpy as np
+
 from .boxes import WordBox, character_width, group_into_lines
+
+#: Anything darker than this in the cleaned page is print.
+INK_LEVEL = 140
 
 #: How much of a character may sit between two boxes that are one word.
 GLYPH_GAP_CHARS = 0.35
@@ -69,3 +74,44 @@ def merge_glyph_runs(words: Sequence[WordBox]) -> list[WordBox]:
         if current is not None:
             merged.append(current)
     return merged
+
+
+def tighten_boxes(words: Sequence[WordBox], grey: np.ndarray) -> list[WordBox]:
+    """
+    Each word's box cut down to the ink inside it.
+
+    A recogniser gives a line as one box and shares it out among the words, spaces
+    and all, so neighbouring words touch and the gaps that separate one column from
+    the next are gone. A PDF's words have real gaps, and everything downstream that
+    tells a column's end from a word space reads them. Cutting a word's box to its
+    own ink puts the gaps back: the same page, set down the same way, whether it
+    came as text or as pixels.
+
+    Done after the glyphs are joined, which needs the boxes to touch.
+    """
+    height, width = grey.shape[:2]
+    out: list[WordBox] = []
+    for word in words:
+        left = max(0, int(word.x))
+        right = min(width, int(np.ceil(word.right)))
+        top = max(0, int(word.y))
+        bottom = min(height, int(np.ceil(word.bottom)))
+        if right - left < 2 or bottom - top < 2:
+            out.append(word)
+            continue
+        inked = np.flatnonzero((grey[top:bottom, left:right] < INK_LEVEL).any(axis=0))
+        if len(inked) < 2:
+            out.append(word)
+            continue
+        first, last = int(inked[0]), int(inked[-1])
+        out.append(
+            WordBox(
+                text=word.text,
+                x=float(left + first),
+                y=word.y,
+                width=float(max(last - first + 1, 1)),
+                height=word.height,
+                confidence=word.confidence,
+            )
+        )
+    return out

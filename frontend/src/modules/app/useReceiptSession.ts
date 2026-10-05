@@ -280,23 +280,21 @@ export function useReceiptSession(): ReceiptSession {
 
   /**
    * Choose what the document is. The reader is not asked to work it out: the
-   * choice picks the route. A file already on screen is read again as the new
-   * kind, because the rows on screen were read as the old one.
+   * choice picks the route. What is on screen was read as the old kind, so it
+   * is cleared — the file, its pages and its rows — and the next upload starts
+   * clean as the new one.
    */
-  const setMode = useCallback(
-    (next: DocumentMode) => {
-      if (next === modeRef.current) return
-      modeRef.current = next
-      setModeState(next)
-      try {
-        localStorage.setItem(MODE_KEY, next)
-      } catch {
-        // A browser that will not remember the choice still has it for now.
-      }
-      if (fileRef.current) void onFile(fileRef.current)
-    },
-    [onFile],
-  )
+  const setMode = (next: DocumentMode) => {
+    if (next === modeRef.current) return
+    modeRef.current = next
+    setModeState(next)
+    try {
+      localStorage.setItem(MODE_KEY, next)
+    } catch {
+      // A browser that will not remember the choice still has it for now.
+    }
+    clearCurrent()
+  }
 
   /** Take an extra table out of the export, or put it back. */
   const toggleTable = useCallback((key: string) => {
