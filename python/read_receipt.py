@@ -135,93 +135,6 @@ def suppress_colored_watermark(rgb: np.ndarray) -> tuple[np.ndarray, float]:
 # --------------------------------------------------------------------------- #
 
 
-# A game-pack code, and a settled date. Both have a shape nothing else on these
-# receipts shares, which is what makes peeling them off a glued token safe.
-PACK_PREFIX = re.compile(r"^\d{3}-\d{5,8}")
-PACK_STANDALONE = re.compile(r"\d{3}-(\d{5,8})")
-DATE_ANYWHERE = re.compile(r"\d{2}/\d{2}/\d{2,4}")
-
-
-def _structural_cuts(token: str, pack_digits: int | None) -> list[int]:
-    """
-    Where a token has to be cut because the recogniser dropped a space.
-
-    PP-OCR's recogniser emits a line as one string and is unreliable about
-    spaces: `881-023234 DIAMONDS & GOLD` comes back as
-    `881-023234DIAMONDS&GOLD`. Whitespace splitting alone then yields one token,
-    `findPack` cannot match a pack code inside it, and the whole settlement row
-    is dropped — 14 of the 25 rows on the sample receipt.
-
-    Only shapes that cannot occur inside another field are cut on. A pack code
-    is three digits, a hyphen and five to eight more; a date is two-two-two
-    around slashes. Neither appears inside a game name or an amount, so peeling
-    them is unambiguous. Digit-to-letter transitions in general are not — they
-    occur inside `200X THE CASH`, `X-TRA` and `$1.000`, and cutting there would
-    shred the names this is trying to recover.
-    """
-    cuts: set[int] = set()
-
-    pack = PACK_PREFIX.match(token)
-    if pack:
-        # `\d{5,8}` is greedy, and where the name that follows starts with
-        # digits it eats them: `833-129986` glued to `200X THE CASH` matches
-        # entirely as `833-12998620`, which is still a *valid* pack code and so
-        # passes downstream silently with two extra digits. Cutting at the
-        # length the rest of the page uses recovers the real code.
-        end = pack.end()
-        if pack_digits is not None:
-            fixed = 4 + pack_digits  # `NNN-` plus the suffix
-            if fixed < end:
-                end = fixed
-        if end < len(token):
-            cuts.add(end)
-
-    for match in DATE_ANYWHERE.finditer(token):
-        if match.start() > 0:
-            cuts.add(match.start())
-        if match.end() < len(token):
-            cuts.add(match.end())
-
-    return sorted(cuts)
-
-
-def modal_pack_digits(texts: list[str]) -> int | None:
-    """
-    How many digits follow the hyphen in this page's pack codes.
-
-    Taken from the codes the recogniser got cleanly — one per line, nothing
-    glued on — because those are unambiguous. Every code on a given receipt is
-    the same shape, so the most common length among them is the page's, and it
-    can be trusted to cut the glued ones. Returns None when too few clean codes
-    were read to be sure, in which case nothing is assumed.
-    """
-    lengths: dict[int, int] = {}
-    for text in texts:
-        for token in text.split():
-            match = PACK_STANDALONE.fullmatch(token)
-            if match:
-                length = len(match.group(1))
-                lengths[length] = lengths.get(length, 0) + 1
-    if not lengths:
-        return None
-    best, count = max(lengths.items(), key=lambda kv: kv[1])
-    return best if count >= 3 else None
-
-
-def _cut_token(token: str, pack_digits: int | None) -> list[str]:
-    cuts = _structural_cuts(token, pack_digits)
-    if not cuts:
-        return [token]
-    pieces: list[str] = []
-    previous = 0
-    for cut in [*cuts, len(token)]:
-        piece = token[previous:cut]
-        if piece:
-            pieces.append(piece)
-        previous = cut
-    return pieces
-
-
 # --------------------------------------------------------------------------- #
 # Spaces the recogniser dropped                                                #
 # --------------------------------------------------------------------------- #
@@ -238,7 +151,7 @@ SPACE_GAP = 0.32
 
 def ink_gaps(
     page: np.ndarray, x0: int, y0: int, x1: int, y1: int
-) -> tuple[list[float], list[int]]:
+) -> tuple[list[float], list[int], list[float]]:
     """
     Word-sized blank runs inside a line box, and the glyphs between them.
 
@@ -252,12 +165,12 @@ def ink_gaps(
     x0, y0 = max(0, x0), max(0, y0)
     x1, y1 = min(width, x1), min(height, y1)
     if x1 - x0 < 2 or y1 - y0 < 2:
-        return [], []
+        return [], [], []
     ink = page[y0:y1, x0:x1] < INK_LEVEL
     inked = ink.any(axis=0)
     on = np.flatnonzero(inked)
     if len(on) < 2:
-        return [], []
+        return [], [], []
 
     # Cap height from the tall strokes, so a watermark speck above the line
     # does not inflate it and a dot or comma does not shrink it.
@@ -265,9 +178,10 @@ def ink_gaps(
     bottom = ink.shape[0] - 1 - ink[::-1].argmax(axis=0)
     cap = float(np.percentile((bottom - top + 1)[inked], 90))
     if cap <= 0:
-        return [], []
+        return [], [], []
 
     gaps: list[float] = []
+    widths: list[float] = []
     glyphs: list[int] = [0]
     run_start: int | None = int(on[0])
     for column in range(int(on[0]), int(on[-1]) + 1):
@@ -278,10 +192,17 @@ def ink_gaps(
         if run_start is not None:
             if column - run_start >= SPACE_GAP * cap:
                 gaps.append(x0 + (run_start + column) / 2)
+                widths.append((column - run_start) / cap)
                 glyphs.append(0)
             glyphs[-1] += 1
             run_start = None
-    return gaps, glyphs
+    return gaps, glyphs, widths
+
+
+#: Blank run, in cap heights, that cuts a number in two. Digits of one number are
+#: set with a little room between them, just over what splits two words; the gap
+#: between one numeric column and the next is a great deal wider.
+DIGIT_GAP = 0.5
 
 
 def restore_spaces(
@@ -289,6 +210,7 @@ def restore_spaces(
     spans: list[tuple[float, float]],
     gaps: list[float],
     glyphs: list[int] | None = None,
+    widths: list[float] | None = None,
 ) -> tuple[str, list[tuple[float, float]]]:
     """
     Put a space into `text` at each blank run the print shows.
@@ -307,6 +229,24 @@ def restore_spaces(
         return text, spans
 
     kept = [index for index, char in enumerate(text) if not char.isspace()]
+    if widths and glyphs and len(glyphs) == len(gaps) + 1 and all(glyphs) and sum(glyphs) == len(kept):
+        # A narrow gap between two digits is inside a number: join the two runs.
+        joined_gaps: list[float] = []
+        joined = [glyphs[0]]
+        cursor = glyphs[0]
+        for k, count in enumerate(glyphs[1:]):
+            inside_number = (
+                text[kept[cursor - 1]].isdigit() and text[kept[cursor]].isdigit() and widths[k] < DIGIT_GAP
+            )
+            if inside_number:
+                joined[-1] += count
+            else:
+                joined_gaps.append(gaps[k])
+                joined.append(count)
+            cursor += count
+        gaps, glyphs = joined_gaps, joined
+        if not gaps:
+            return text, spans
     if glyphs and len(glyphs) == len(gaps) + 1 and all(glyphs) and sum(glyphs) == len(kept):
         out_text: list[str] = []
         out_spans: list[tuple[float, float]] = []
@@ -355,104 +295,6 @@ def restore_spaces(
 
 # --------------------------------------------------------------------------- #
 # Re-reading text lines                                                        #
-# --------------------------------------------------------------------------- #
-
-# Upscales a text line is recognised again at. Each alone gets characters wrong
-# that the page pass got right (`10X` as `10x`, `$10,000` as `510,000`); what
-# they agree on, against the page pass, is where the page pass was wrong
-# (`SOX THE CASH` for `50X`, `FIERY SS` for `5S`, `S200` for `$200`).
-REREAD_VARIANTS = ((3.0, "cubic"), (3.0, "nearest"), (4.0, "cubic"))
-
-
-def vote_characters(original: str, readings: list[str]) -> str:
-    """
-    Replace a page-pass character only where every re-read agrees on another.
-
-    Only readings with the same number of non-space characters take part —
-    one that gained or lost a character cannot be lined up without guessing —
-    and all of them must take part. A simple majority was measured and is not
-    enough: on the invoice's smaller print two re-reads agreeing on `On-tine`
-    and `Promd` outvoted a correct page pass. A winner that differs only in case
-    keeps the page pass's case, so `10X` is never turned into `10x`. Spaces are
-    not voted on; they come from the pixels (`restore_spaces`).
-    """
-    import unicodedata
-
-    base = [(index, char) for index, char in enumerate(original) if not char.isspace()]
-    target = len(base)
-    aligned = []
-    for reading in readings:
-        chars = [c for c in unicodedata.normalize("NFKC", reading) if not c.isspace()]
-        if len(chars) == target:
-            aligned.append(chars)
-    if not aligned or len(aligned) < len(readings):
-        return original
-
-    out = list(original)
-    for position, (index, char) in enumerate(base):
-        choices = {chars[position] for chars in aligned}
-        if len(choices) != 1:
-            continue
-        winner = choices.pop()
-        if winner.lower() != char.lower():
-            out[index] = winner
-    return "".join(out)
-
-
-def name_column(result: list) -> tuple[float, float, float] | None:
-    """
-    Left edge, right edge and top of the inventory's Name column, in page pixels.
-
-    Taken from the printed `Game Name` and `Int Rec Act Set` header lines. None
-    when the page has no such header, which keeps the re-read off every other
-    receipt: measured on the invoice's smaller print, re-reads agree with each
-    other on errors (`On-tine`, `Promd`) as readily as on fixes.
-    """
-    game = counts = None
-    for entry in result:
-        key = re.sub(r"\s", "", str(entry[1])).lower()
-        points = np.asarray(entry[0], dtype=np.float32)
-        if key.startswith("gamename"):
-            game = points
-        elif key.startswith("intrec"):
-            counts = points
-    if game is None or counts is None:
-        return None
-    # `Name` starts five characters into the nine of `Game Name`; a little short
-    # of that, so a name printed a hair left of its label still qualifies.
-    left = game[:, 0].min() + (game[:, 0].max() - game[:, 0].min()) * 0.45
-    right = counts[:, 0].min()
-    top = max(game[:, 1].max(), counts[:, 1].max())
-    return float(left), float(right), float(top)
-
-
-def reread_lines(
-    engine, source: np.ndarray, boxes: list[tuple[float, float, float, float]]
-) -> list[list[str]]:
-    """Recognise each box of `source` again at every `REREAD_VARIANTS` upscale."""
-    import cv2
-
-    interpolation = {"cubic": cv2.INTER_CUBIC, "nearest": cv2.INTER_NEAREST}
-    height, width = source.shape[:2]
-    readings: list[list[str]] = [[] for _ in boxes]
-    for upscale, mode in REREAD_VARIANTS:
-        crops = []
-        for x0, y0, x1, y1 in boxes:
-            pad = 3
-            crop = source[
-                max(0, int(y0) - pad) : min(height, int(np.ceil(y1)) + pad),
-                max(0, int(x0) - pad) : min(width, int(np.ceil(x1)) + pad),
-            ]
-            crop = cv2.resize(crop, None, fx=upscale, fy=upscale, interpolation=interpolation[mode])
-            crop = cv2.copyMakeBorder(crop, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
-            crops.append(cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR) if crop.ndim == 2 else crop)
-        if not crops:
-            continue
-        results, _ = engine.text_rec(crops)
-        for index, result in enumerate(results):
-            readings[index].append(str(result[0]))
-    return readings
-
 
 def split_line_into_words(
     x: float,
@@ -461,7 +303,6 @@ def split_line_into_words(
     h: float,
     text: str,
     score: float,
-    pack_digits: int | None = None,
     spans: list[tuple[float, float]] | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -478,6 +319,9 @@ def split_line_into_words(
     coordinates as `x` — each piece is placed where its own characters were read
     instead of by its share of the string, which matters on a proportional font
     where `W` is three times `I`.
+
+    Only whitespace cuts a line. A token the recogniser ran together is cut
+    later, by the reader, where the page's columns say it spans several.
     """
     line = text.strip()
     if not line or w <= 0 or h <= 0:
@@ -505,24 +349,10 @@ def split_line_into_words(
         start = index
         while index < span and not line[index].isspace():
             index += 1
-        token = line[start:index]
-        # Each piece keeps the share of the box its own characters occupy, so a
-        # peeled pack code lands on the left and the name it was glued to stays
-        # where the name is printed.
-        offset = start
-        for piece in _cut_token(token, pack_digits):
-            left, piece_width = place(offset, len(piece))
-            words.append(
-                {
-                    "text": piece,
-                    "x": left,
-                    "y": y,
-                    "width": piece_width,
-                    "height": h,
-                    "confidence": score,
-                }
-            )
-            offset += len(piece)
+        left, width = place(start, index - start)
+        words.append(
+            {"text": line[start:index], "x": left, "y": y, "width": width, "height": h, "confidence": score}
+        )
     return words
 
 
@@ -677,7 +507,6 @@ def read_words(
 ) -> list[dict[str, Any]]:
     import cv2
 
-    source = page if page.ndim == 2 else cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
     if scale != 1:
         page = cv2.resize(
             page, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST
@@ -690,29 +519,10 @@ def read_words(
     if not result:
         return []
 
-    # Game names in the inventory's Name column are read again and settled by
-    # vote. Figures are left alone: their errors are what the row builders and
-    # the receipt's own totals already catch.
-    column = name_column(result) if restore else None
-    worded = []
-    if column is not None:
-        left, right, top = column
-        for index, entry in enumerate(result):
-            points = np.asarray(entry[0], dtype=np.float32)
-            if points[:, 0].min() >= left and points[:, 0].max() <= right and points[:, 1].min() >= top:
-                worded.append(index)
-    boxes = []
-    for index in worded:
-        points = np.asarray(result[index][0], dtype=np.float32) / scale
-        boxes.append((*points.min(axis=0), *points.max(axis=0)))
-    rereads = dict(zip(worded, reread_lines(engine, source, boxes)))
-
     lines: list[tuple[float, float, float, float, str, float, list | None]] = []
     overlay_lines: set[int] = set()
     for position, entry in enumerate(result):
         box, text, score = entry[0], str(entry[1]), float(entry[2])
-        if position in rereads:
-            text = vote_characters(text, rereads[position])
         char_boxes = entry[3] if len(entry) > 3 else None
         points = np.asarray(box, dtype=np.float32)
         x0, y0 = points[:, 0].min(), points[:, 1].min()
@@ -739,8 +549,8 @@ def read_words(
                     text, spans = trimmed, kept
                     x0 = min(left for left, _ in spans)
                     x1 = max(right for _, right in spans)
-            gaps, glyphs = ink_gaps(grey, int(x0), int(y0), int(np.ceil(x1)), int(np.ceil(y1)))
-            text, spans = restore_spaces(text, spans, gaps, glyphs)
+            gaps, glyphs, widths = ink_gaps(grey, int(x0), int(y0), int(np.ceil(x1)), int(np.ceil(y1)))
+            text, spans = restore_spaces(text, spans, gaps, glyphs, widths)
             spans = [(left / scale, right / scale) for left, right in spans]
         lines.append((x0, y0, x1, y1, text, score, spans))
 
@@ -749,11 +559,6 @@ def read_words(
     # printed in dark ink, so a document set in a pale ink is not emptied.
     if overlay_lines and len(overlay_lines) * 2 < len(lines):
         lines = [line for index, line in enumerate(lines) if index not in overlay_lines]
-
-    # Two phases: the pack-code length has to be known from the whole page
-    # before any line can be cut, because the glued lines are exactly the ones
-    # that cannot tell you what it is.
-    pack_digits = modal_pack_digits([text for *_, text, _, _ in lines])
 
     words: list[dict[str, Any]] = []
     for x0, y0, x1, y1, text, score, spans in lines:
@@ -765,7 +570,6 @@ def read_words(
                 float(y1 - y0) / scale,
                 text,
                 score,
-                pack_digits,
                 spans,
             )
         )

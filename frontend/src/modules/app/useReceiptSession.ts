@@ -5,9 +5,11 @@ import {
   readDocument,
   ReaderError,
   readerIsReady,
+  type DocumentMode,
   type DocumentPage,
   type ExtraTable,
   type PageFailure,
+  type StatementSummary,
 } from '../../ocr/api'
 import { rowCells, shiftedAfterRemoval, withCell, withoutRow } from '../../ocr/result'
 import type { ProgressEvent } from '../../ocr/types'
@@ -44,8 +46,22 @@ function drawPage(canvas: HTMLCanvasElement, url: string, signal: AbortSignal): 
   image.src = url
 }
 
+const MODE_KEY = 'receipt-ocr:mode'
+
+/** The kind the user chose last time, so it does not have to be chosen again. */
+function storedMode(): DocumentMode {
+  try {
+    const saved = localStorage.getItem(MODE_KEY)
+    return saved === 'bank' || saved === 'lottery' ? saved : 'receipt'
+  } catch {
+    return 'receipt'
+  }
+}
+
 /** Upload, read, edit, and page through one document. */
 export function useReceiptSession(): ReceiptSession {
+  const [mode, setModeState] = useState<DocumentMode>(storedMode)
+  const [statement, setStatement] = useState<StatementSummary | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [stages, setStages] = useState<StageMap>({})
   // Every page read, by page index. An image is page 0 of one.
@@ -66,6 +82,11 @@ export function useReceiptSession(): ReceiptSession {
   const [extraTables, setExtraTables] = useState<ExtraTable[]>([])
   const [currentPage, setCurrentPage] = useState(0)
   const [isPdfMode, setIsPdfMode] = useState(false)
+
+  // The kind and the file a read starts from, held where a callback made once
+  // can still see them.
+  const modeRef = useRef(mode)
+  const fileRef = useRef<File | null>(null)
 
   const previewRef = useRef<HTMLCanvasElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -105,6 +126,7 @@ export function useReceiptSession(): ReceiptSession {
   }, [documentPages, currentPage, hasPreview])
 
   const onFile = useCallback(async (file: File) => {
+    fileRef.current = file
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -123,13 +145,14 @@ export function useReceiptSession(): ReceiptSession {
     setError(null)
     setDocumentPages([])
     setExtraTables([])
+    setStatement(null)
     setCurrentPage(0)
     setIsPdfMode(false)
 
     progress({ stage: 'upload', status: 'start', message: 'sending the page to the reader…' })
     const started = performance.now()
     try {
-      const read = await readDocument(file, controller.signal)
+      const read = await readDocument(file, controller.signal, modeRef.current)
       if (abortRef.current !== controller) return
       const elapsed = performance.now() - started
       progress({ stage: 'upload', status: 'done', elapsedMs: elapsed })
@@ -145,6 +168,7 @@ export function useReceiptSession(): ReceiptSession {
       releaseRef.current = read.release
       setDocumentPages(read.pages)
       setExtraTables(read.extraTables)
+      setStatement(read.statement)
       setIsPdfMode(read.pages.length > 1 || file.type === 'application/pdf')
       setPages(new Map(read.pages.map((page, index) => [index, freshRead(page)])))
       const rows = read.pages.reduce((total, page) => total + page.result.rows.length, 0)
@@ -248,8 +272,28 @@ export function useReceiptSession(): ReceiptSession {
     setImageDimensions(null)
     setDocumentPages([])
     setExtraTables([])
+    setStatement(null)
+    fileRef.current = null
     setIsPdfMode(false)
     setCurrentPage(0)
+  }
+
+  /**
+   * Choose what the document is. The reader is not asked to work it out: the
+   * choice picks the route. What is on screen was read as the old kind, so it
+   * is cleared — the file, its pages and its rows — and the next upload starts
+   * clean as the new one.
+   */
+  const setMode = (next: DocumentMode) => {
+    if (next === modeRef.current) return
+    modeRef.current = next
+    setModeState(next)
+    try {
+      localStorage.setItem(MODE_KEY, next)
+    } catch {
+      // A browser that will not remember the choice still has it for now.
+    }
+    clearCurrent()
   }
 
   /** Take an extra table out of the export, or put it back. */
@@ -303,6 +347,9 @@ export function useReceiptSession(): ReceiptSession {
   const busy = phase === 'running' || phase === 'booting'
 
   return {
+    mode,
+    setMode,
+    statement,
     stages,
     pages,
     pageErrors,

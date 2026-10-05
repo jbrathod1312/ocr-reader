@@ -12,8 +12,11 @@
 /* Rows                                                                        */
 /* -------------------------------------------------------------------------- */
 
-/** Which table was read. Each kind prints its own columns. */
-export type ReceiptKind = 'inventory' | 'settlements' | 'invoice' | 'table'
+/**
+ * Which table was read. Always a table: every page is read as the table it
+ * holds, and nothing says what sort of document that is.
+ */
+export type ReceiptKind = 'table'
 
 /**
  * One row, cells left to right under the printed header.
@@ -33,6 +36,8 @@ export interface TableRow {
    * printed, with only its column filled.
    */
   label?: boolean
+  /** The row that restates the columns' sums, found by the reader's arithmetic. */
+  total?: boolean
 }
 
 /**
@@ -105,14 +110,7 @@ export interface SkippedLine {
 /** A place where the reading contradicts the receipt's own arithmetic. */
 export interface ValidationIssue {
   /** Which check failed, for the UI to group by. */
-  code:
-    | 'inventory-totals'
-    | 'inventory-solved'
-    | 'inventory-unread'
-    | 'settlements-count'
-    | 'settlements-unread'
-    | 'invoice-total'
-    | 'invoice-section-total'
+  code: 'table-totals' | 'table-count' | 'table-repeated' | 'table-sum' | 'bank-balance' | 'bank-totals'
   /** One sentence naming both sides of the contradiction. */
   message: string
   /** Indices into {@link OcrResult.rows} that the check covers, for highlighting. */
@@ -156,7 +154,7 @@ export interface OcrResult {
   columnBounds?: number[]
   /**
    * Places where the reading contradicts the receipt's own arithmetic, or where
-   * a count was solved from TOTALS or could not be read.
+   * a total or a count does not agree with the rows.
    */
   validation: ValidationIssue[]
   /**

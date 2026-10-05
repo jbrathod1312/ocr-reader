@@ -38,6 +38,8 @@ class TableRow:
     confidence: float
     #: A line kept for what it says rather than for what it is worth.
     label: bool = False
+    #: The row that restates the columns' sums, found by arithmetic.
+    total: bool = False
 
 
 @dataclass(slots=True)
@@ -111,27 +113,6 @@ def _max(values: Iterable[float], default: float = -math.inf) -> float:
 
 def normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
-
-
-def is_lottery_header(headers: Sequence[str]) -> bool:
-    """A printed header this page is not a lottery ticket."""
-    norm = [normalize(header) for header in headers]
-
-    def has(pattern: str) -> bool:
-        return any(re.search(pattern, header) for header in norm)
-
-    inventory = (
-        has(r"^games?$")
-        and has(r"^name$")
-        and has(r"^int")
-        and has(r"^rec")
-        and has(r"^act")
-        and has(r"^set")
-    )
-    settlements = (has(r"gamepack") or (has(r"^game$") and has(r"pack"))) and (
-        has(r"datesettled") or has(r"settled") or has(r"^date$")
-    )
-    return inventory or settlements
 
 
 # --------------------------------------------------------------------------- #
@@ -1239,7 +1220,7 @@ def untitled_columns(
     merged = sorted([*columns, *added], key=lambda c: c.x)
     for index, column in enumerate(merged):
         if any(column is each for each in added):
-            column.label = f"Column {index + 1}"
+            column.label = ""
     return merged
 
 
