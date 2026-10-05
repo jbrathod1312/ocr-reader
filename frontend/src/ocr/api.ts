@@ -39,9 +39,34 @@ export interface ExtraTable {
   rows: Array<{ page: number; cells: string[] }>
 }
 
+/**
+ * What the user says the document is. The reader never guesses: a bank
+ * statement is read by its own reader, on its own route.
+ */
+export type DocumentMode = 'receipt' | 'bank'
+
+/** What a bank statement says about itself, and whether its rows agree. */
+export interface StatementSummary {
+  transactions: number
+  firstDate: string | null
+  lastDate: string | null
+  debits: string | null
+  credits: string | null
+  openingBalance: string | null
+  closingBalance: string | null
+  /** `ok` when every printed balance follows from the one beside it. */
+  balanceCheck: 'ok' | 'broken' | 'unchecked'
+  balanceLinksChecked: number
+  balanceLinksBroken: number
+  /** What the statement itself prints, for the rows to be held against. */
+  stated: { transactions: number | null; debits: string | null; credits: string | null }
+}
+
 export interface ReadDocument {
   pages: DocumentPage[]
   extraTables: ExtraTable[]
+  /** Present when the document was read as a bank statement. */
+  statement: StatementSummary | null
   /**
    * Frees whatever is held for the pictures, for a document being replaced.
    * Nothing to free when the pictures come from the reader.
@@ -147,11 +172,18 @@ async function isPdf(file: Blob): Promise<boolean> {
   return String.fromCharCode(...head) === '%PDF-'
 }
 
+/** The route that reads each kind of document. */
+const ROUTE: Record<DocumentMode, string> = { receipt: '/document', bank: '/bank' }
+
 /** Read one file — a PDF or an image — and return every page of it. */
-export async function readDocument(file: Blob, signal?: AbortSignal): Promise<ReadDocument> {
+export async function readDocument(
+  file: Blob,
+  signal?: AbortSignal,
+  mode: DocumentMode = 'receipt',
+): Promise<ReadDocument> {
   let response: Response
   try {
-    response = await fetch(`${READER}/document`, {
+    response = await fetch(`${READER}${ROUTE[mode]}`, {
       method: 'POST',
       body: file,
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
@@ -169,6 +201,7 @@ export async function readDocument(file: Blob, signal?: AbortSignal): Promise<Re
     document: string
     pages: PageJson[]
     extraTables: ExtraTable[]
+    statement?: StatementSummary
   }
 
   // An image is its own picture, and the browser already has it. Asking the
@@ -180,6 +213,7 @@ export async function readDocument(file: Blob, signal?: AbortSignal): Promise<Re
 
   return {
     extraTables: body.extraTables ?? [],
+    statement: body.statement ?? null,
     release: () => {
       if (local) URL.revokeObjectURL(local)
     },

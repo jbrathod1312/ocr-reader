@@ -127,11 +127,8 @@ def _read_pdf_document(
     return readings
 
 
-def _read_image(
-    data: bytes,
-    recognise: Recogniser | None,
-    row_overlap_ratio: float,
-) -> list[PageReading]:
+def load_image_pixels(data: bytes):
+    """An uploaded image as RGB pixels, flattened onto white where it has transparency."""
     import numpy as np
     from PIL import Image
 
@@ -145,7 +142,15 @@ def _read_image(
         image = white
     else:
         image = image.convert("RGB")
-    pixels = np.asarray(image)
+    return np.asarray(image)
+
+
+def _read_image(
+    data: bytes,
+    recognise: Recogniser | None,
+    row_overlap_ratio: float,
+) -> list[PageReading]:
+    pixels = load_image_pixels(data)
 
     words = merge_glyph_runs(recognise(pixels)) if recognise is not None else []
     result = assemble_receipt(words, row_overlap_ratio, None)
@@ -154,8 +159,8 @@ def _read_image(
     return [
         PageReading(
             number=1,
-            width=int(image.width),
-            height=int(image.height),
+            width=int(pixels.shape[1]),
+            height=int(pixels.shape[0]),
             reader="recogniser" if recognise is not None else "none",
             result=result,
             words=list(words),

@@ -12,7 +12,7 @@ server differs from the command-line script.
   a multipart form, and not a third-party cloud service. The server tells a
   PDF from an image by looking at the first five bytes.
 - The server is **`python/serve.py`** (default **127.0.0.1:8756**). In dev,
-  Vite proxies `/document`, `/export`, `/page` and `/health` to that port.
+  Vite proxies `/document`, `/bank`, `/export`, `/page` and `/health` to that port.
 - **There is no fallback.** Without the reader the app says so and reads
   nothing: the browser has no reader of its own any more.
 - **`read_receipt.py`** is the PP-OCR engine. `serve.py` imports it; it also
@@ -20,11 +20,12 @@ server differs from the command-line script.
 
 ---
 
-## The three routes
+## The routes
 
 | Route            | What it is for                                                                                                                                          |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /document` | A PDF or an image in; every page's reading out. `?format=csv` or `?format=json` returns the finished export instead, for a caller with nothing to edit. |
+| `POST /bank`     | A bank statement in; the same shape out as `/document`, plus a `statement` summary. Read by `reader/bank/`, not by the general reader. |
 | `POST /export`   | The pages a caller holds, back as one CSV or JSON.                                                                                                      |
 | `GET /page`      | The picture of one page of a PDF just read, at the width asked for.                                                                                     |
 
@@ -41,6 +42,39 @@ presents it as `Authorization: Bearer <key>`; a browser opens the app once as
 `/?key=<key>` and the reader moves it into an HttpOnly cookie and redirects to
 the clean URL. The cookie is what makes the viewer work — `<img src="/page…">`
 cannot carry a header. `/health` is the one route that never asks.
+
+### Bank statements
+
+A statement is read by its own reader, on its own route, **because the user
+says it is one** — the app has a "Document type" choice above the viewer and
+nothing guesses. Changing it with a file loaded reads that file again as the
+new kind.
+
+`reader/bank/` reads **no word for its meaning** — no title, no label, no
+"Viewing … of N", no `CR`/`DR`. Everything is shape, position or arithmetic, so a
+statement with its titles in another language, or none at all, reads the same:
+
+- **Rows** are the lines that carry a date and a figure (a date and a figure are
+  recognised by their shape). A link above a date line and a second line of the
+  description below it belong to that row.
+- **Columns** are where those rows' ink gathers: figures are clustered by where
+  they sit, dates by the cluster the rows anchor on, and text by the clear space
+  the rows leave between it.
+- **Titles** are copied as printed from the nearest line over the columns; none
+  is interpreted. With no such line the columns are `Column 1`, `Column 2`…
+- **Which column is the running balance, and which way each other column moves
+  it, is found by arithmetic.** The balance column is the one whose changes from
+  row to row equal the other columns' figures. A column whose figures add to the
+  balance is money in; one whose figures take away is money out.
+- **Totals** are figures printed under the rows with nothing in the balance
+  column. They are held against what the rows add up to.
+
+Row by row, each balance must follow from the one beside it, so a misread digit
+breaks the proof and names the row to look at. The checks come back as ordinary
+validation issues (`bank-balance`, `bank-totals`), so the viewer flags the rows
+and lists the warnings as it does for any page. Where no column can be shown to
+be a running balance the statement is reported as unchecked, not guessed at.
+`python/check_corpus.py` reads `frontend/tools/corpus/bank/` with this reader.
 
 ### Why `/export` is a POST that carries the rows
 
@@ -91,6 +125,7 @@ layer is a token has to be recognised, and only those pages pay for it.
 | `reader/validate.py` | Each receipt against its own arithmetic.                     |
 | `reader/assemble.py` | Which kind of page this is, and its reading.                 |
 | `reader/document.py` | A whole file in, every page's reading out.                   |
+| `reader/bank/`       | A bank statement: ledger, rows at dates, the running-balance checks. |
 | `reader/export.py`   | Every page as one CSV or JSON, tables and log beside it.     |
 | `reader/skipped.py`  | What a line the table reader left out actually is.           |
 

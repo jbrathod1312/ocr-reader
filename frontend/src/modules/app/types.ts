@@ -1,7 +1,14 @@
 import type { RefObject } from 'react'
 
 import type { StageMap } from '../../lib/stage-state'
-import type { DocumentPage, ExportPage, ExtraTable, PageFailure } from '../../ocr/api'
+import type {
+  DocumentMode,
+  DocumentPage,
+  ExportPage,
+  ExtraTable,
+  PageFailure,
+  StatementSummary,
+} from '../../ocr/api'
 import type { OcrResult, WordBox } from '../../ocr/types'
 import type { PageRows } from '../../components/ResultView'
 
@@ -47,6 +54,12 @@ export function resultTitle(result: OcrResult): string {
 
 /** The reading session the page layout renders. */
 export interface ReceiptSession {
+  /** What the user says the next file is: nothing here works it out. */
+  mode: DocumentMode
+  /** Choose the kind of document; a file already loaded is read again as it. */
+  setMode: (mode: DocumentMode) => void
+  /** What a bank statement says about itself, when one was read. */
+  statement: StatementSummary | null
   stages: StageMap
   pages: ReadonlyMap<number, PageRead>
   pageErrors: ReadonlyMap<number, string>

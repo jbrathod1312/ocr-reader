@@ -2,13 +2,19 @@
 """
 Serve the reader to the browser app.
 
-The reading itself is `python/reader/`; this is the door to it. Three routes,
-and the first is the only one that takes a file:
+The reading itself is `python/reader/`; this is the door to it. Four routes,
+and the first two are the only ones that take a file:
 
     POST /document    a PDF or an image — the server tells which by looking —
                       and back comes every page's reading. `?format=csv` or
                       `?format=json` returns the finished export instead, for a
                       caller that has nothing to edit.
+    POST /bank        a bank statement, read as one: its ledger found by what the
+                      titles mean, its rows cut at dates, and every row checked
+                      against the statement's own running balance. The same
+                      shape comes back as from /document, plus a `statement`
+                      summary, so the viewer and the export need nothing new.
+                      The caller says it is a statement; nothing guesses.
     POST /export      the pages a caller holds, back as one CSV or JSON. Posted
                       rather than re-read because the app may have had a cell
                       typed into it or a table taken out.
@@ -17,12 +23,12 @@ and the first is the only one that takes a file:
                       an uploaded image is its own picture and is never asked
                       for back.
 
-One upload route, not one per file type: what a file is, is in the file. The
-app should not have to decide, and a caller that guesses wrong should not get a
-different answer.
+One upload route per kind of document, not per file type: a PDF or an image is
+told apart by looking at it. What a document *is* — an invoice, or a bank
+statement — is the caller's to say, so it picks the route; nothing here guesses.
 
 Standard library only, deliberately. A framework would be one more thing to
-install for what is three endpoints.
+install for what is four endpoints.
 
     .venv/bin/python python/serve.py --warm          # dev, 127.0.0.1:8756
     .venv/bin/python python/serve.py --live --warm   # public, serves frontend/dist
@@ -63,6 +69,7 @@ from read_receipt import (  # noqa: E402
     read_words,
     suppress_colored_watermark,
 )
+from reader.bank.statement import read_statement  # noqa: E402
 from reader.boxes import WordBox  # noqa: E402
 from reader.document import document_json, looks_like_pdf, read_document  # noqa: E402
 from reader.export import (  # noqa: E402
@@ -416,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": "origin not allowed"}, origin)
             return
         route = urlparse(self.path).path
-        if route not in ("/document", "/export"):
+        if route not in ("/document", "/bank", "/export"):
             self._send(404, {"error": "not found"}, origin)
             return
         if not self._authorised():
@@ -452,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            self._read_document(raw, origin, urlparse(self.path).query)
+            self._read_document(raw, origin, urlparse(self.path).query, bank=route == "/bank")
         finally:
             _pending_reads.release()
 
@@ -515,20 +522,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_document(self, raw: bytes, origin: str | None, query: str = "") -> None:
+    def _read_document(
+        self, raw: bytes, origin: str | None, query: str = "", bank: bool = False
+    ) -> None:
         """
         A whole document in, its reading out.
 
         The page used to do this for itself: rasterise the PDF, read its text
         layer, recognise what had none, and assemble the rows. All of it is
         here now, so there is one reader rather than two.
+
+        `bank` is the caller saying the document is a bank statement, which is
+        read by its own reader and comes back with a summary of what it says.
         """
         arrived = time.perf_counter()
         try:
             with _read_lock:
                 started = time.perf_counter()
-                readings = read_document(raw, _recognise)
+                statement = None
+                if bank:
+                    readings, statement = read_statement(raw, _recognise)
+                else:
+                    readings = read_document(raw, _recognise)
                 payload = document_json(readings)
+                if statement is not None:
+                    payload["statement"] = statement
                 finished = time.perf_counter()
         except Exception as error:  # noqa: BLE001 - report, never crash the server
             self._send(500, {"error": f"{type(error).__name__}: {error}"}, origin)
@@ -553,7 +571,8 @@ class Handler(BaseHTTPRequestHandler):
         rows = sum(len(page["rows"]) for page in payload["pages"])
         readers = ", ".join(sorted({reading.reader for reading in readings}))
         print(
-            f"read {len(readings)} page(s) by {readers} -> {rows} rows in {elapsed}ms{queued}",
+            f"read {len(readings)} page(s) by {readers}"
+            f"{' as a bank statement' if bank else ''} -> {rows} rows in {elapsed}ms{queued}",
             flush=True,
         )
         self._send(200, payload, origin)

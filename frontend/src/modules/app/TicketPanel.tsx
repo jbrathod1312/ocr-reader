@@ -1,4 +1,5 @@
 import { Dropzone } from '../../components/Dropzone'
+import { DocumentModeToggle } from '../../components/DocumentModeToggle'
 import { ReceiptViewer, type PageState } from '../../components/ReceiptViewer'
 import { StageProgress } from '../../components/StageProgress'
 import type { ReceiptSession } from './types'
@@ -21,6 +22,8 @@ export function TicketPanel({ session }: { session: ReceiptSession }) {
     result,
     busy,
     pageError,
+    mode,
+    setMode,
     onFile,
     cancel,
     clearCurrent,
@@ -36,6 +39,7 @@ export function TicketPanel({ session }: { session: ReceiptSession }) {
 
   return (
     <div className="stack">
+      <DocumentModeToggle mode={mode} onChange={setMode} disabled={busy} />
       <ReceiptViewer
         previewRef={previewRef}
         words={words}

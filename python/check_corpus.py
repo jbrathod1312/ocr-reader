@@ -33,16 +33,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from reader.assemble import row_cells  # noqa: E402
+from reader.bank.statement import read_statement  # noqa: E402
 from reader.document import read_document  # noqa: E402
 
 CORPUS = Path(__file__).resolve().parents[1] / "frontend" / "tools" / "corpus"
+#: Bank statements are read by their own reader, because the user says they are
+#: statements: documents in this folder go to it, the rest to the general one.
+BANK = CORPUS / "bank"
 SUFFIXES = (".pdf", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff")
 
 #: How many changed lines to print before saying how many more there are.
 MOST = 40
 
 
-def snapshot(path: Path) -> list[str]:
+def snapshot(path: Path, bank: bool = False) -> list[str]:
     """
     The reading as lines of text, one row per line.
 
@@ -53,7 +57,12 @@ def snapshot(path: Path) -> list[str]:
     than the one line that changed.
     """
     out: list[str] = []
-    for reading in read_document(path.read_bytes()):
+    if bank:
+        readings, summary = read_statement(path.read_bytes())
+        out.append("statement  " + " | ".join(f"{k}={v}" for k, v in summary.items()))
+    else:
+        readings = read_document(path.read_bytes())
+    for reading in readings:
         result = reading.result
         out.append(f"# page {reading.number}  {result.kind}  {reading.reader}")
         out.append("headers  " + " | ".join(result.headers))
@@ -70,16 +79,23 @@ def main() -> int:
     if not CORPUS.exists():
         print(f"no corpus at {CORPUS} — nothing to check")
         return 0
-    documents = sorted(p for p in CORPUS.iterdir() if p.suffix.lower() in SUFFIXES)
+    def listed(folder: Path) -> list[Path]:
+        return (
+            sorted(p for p in folder.iterdir() if p.suffix.lower() in SUFFIXES)
+            if folder.exists()
+            else []
+        )
+
+    documents = [(p, False) for p in listed(CORPUS)] + [(p, True) for p in listed(BANK)]
     if not documents:
         print(f"no documents in {CORPUS} — drop some in and run this again")
         return 0
 
     update = bool(os.environ.get("UPDATE_CORPUS"))
     moved = 0
-    for document in documents:
-        taken = snapshot(document)
-        recorded = CORPUS / f"{document.name}.snap.txt"
+    for document, bank in documents:
+        taken = snapshot(document, bank)
+        recorded = document.parent / f"{document.name}.snap.txt"
         if update or not recorded.exists():
             recorded.write_text("\n".join(taken) + "\n")
             print(f"{document.name}: recorded {len(taken)} lines")
@@ -91,7 +107,7 @@ def main() -> int:
         moved += 1
         # The whole new reading as well as the diff: the diff says what moved,
         # and the file is there to be opened and read in full.
-        (CORPUS / f"{document.name}.actual.txt").write_text("\n".join(taken) + "\n")
+        (document.parent / f"{document.name}.actual.txt").write_text("\n".join(taken) + "\n")
         print(f"\n{document.name} reads differently (UPDATE_CORPUS=1 to record it):")
         shown = 0
         for line in unified_diff(want, taken, "recorded", "now", lineterm="", n=0):

@@ -1,4 +1,5 @@
 import { Pager } from '../../components/Pager'
+import { StatementSummary } from '../../components/StatementSummary'
 import { ExtraTables, FieldsView } from '../../components/ResultView'
 import { validCount } from '../../components/row-status'
 import { resultTitle, type ReceiptSession } from './types'
@@ -7,6 +8,7 @@ import { resultTitle, type ReceiptSession } from './types'
 export function ResultPanel({ session }: { session: ReceiptSession }) {
   const {
     result,
+    statement,
     edited,
     validated,
     removed,
@@ -85,6 +87,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
             </div>
           </div>
           <div className="card__body card__body--compact">
+            {statement && <StatementSummary statement={statement} />}
             <FieldsView
               result={result}
               edited={edited}

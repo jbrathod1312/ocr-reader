@@ -113,6 +113,9 @@ export interface ValidationIssue {
     | 'settlements-unread'
     | 'invoice-total'
     | 'invoice-section-total'
+    | 'bank-balance'
+    | 'bank-count'
+    | 'bank-totals'
   /** One sentence naming both sides of the contradiction. */
   message: string
   /** Indices into {@link OcrResult.rows} that the check covers, for highlighting. */

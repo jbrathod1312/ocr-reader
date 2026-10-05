@@ -7,6 +7,7 @@ import { defineConfig } from 'vite'
 const pythonReader = {
   '/health': 'http://127.0.0.1:8756',
   '/document': 'http://127.0.0.1:8756',
+  '/bank': 'http://127.0.0.1:8756',
   '/page': 'http://127.0.0.1:8756',
   '/export': 'http://127.0.0.1:8756',
 }
