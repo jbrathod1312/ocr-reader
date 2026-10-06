@@ -15,9 +15,8 @@ PP-OCR cannot run in the browser: its ONNX stages need OpenCV, and
 build, wedging the main thread while it does. Outside the browser there is no
 such issue, so the app posts the file to `serve.py` instead.
 
-Tesseract used to read in the browser as a fallback. It was removed when the
-reader moved to Python: there is one reader now, and the app says so rather
-than quietly reading less accurately.
+There is one reader, and the app says so when it is not running rather than quietly
+reading less accurately with something else.
 
 ## Setup
 
@@ -75,49 +74,25 @@ Useful flags:
 
 | flag | what it is for |
 | --- | --- |
-| `--scales 2 3` | emit several passes; the scorer merges them by row. Measured on these receipts it is not worth it — 3 adds nothing and costs a settled date. |
+| `--scales 2 3` | emit several passes, to be merged by row. Measured on these receipts it is not worth it — 3 adds nothing and costs a settled date. |
 | `--no-suppress` | skip the watermark pass, to see what it is actually worth |
 | `--max-side N` | longest side before processing (default 2400) |
 
-## Measured
+## Spaces and boxes
 
-PP-OCR at the default 2× versus the Tesseract reader the app used before the
-reader moved to Python, scored against a transcription of the three sample
-receipts. The scorer was `frontend/tools/score.test.ts` and it went with the
-TypeScript readers, so these numbers cannot be reproduced from the repo as it
-stands; they are kept because they are why PP-OCR is the recogniser. Its
-fixture is gitignored (see **Privacy**), so it is not here either.
+PP-OCR's recogniser returns a whole line as one string and is unreliable about
+spaces, so `read_receipt.py` restores them from the pixels: a blank run of at
+least 0.32 × cap height between inked glyphs is a space, except between two
+digits, where it has to be at least 0.5 (the digits of one number are spaced
+just over what splits two words). The recogniser's one box per line is then
+shared out among its words, spaces included, so neighbouring words touch;
+after the glyphs are joined each word's box is cut down to its own ink
+(`reader/glyphs.py`), which gives the readers the same gaps a PDF's words have.
 
-| | Tesseract | PP-OCR |
-| --- | --- | --- |
-| pack settlements | 25/25 rows, 25 dates exact | 25/25, **25 exact**, 25 names exact |
-| inventory | 43/48 games, 40 count rows exact | **48/48**, **48 exact**, TOTALS exact, 47 names exact |
-| weekly invoice | 45/45 rows, 38 fully exact | 45/45, **41 exact** |
-
-The one inventory name still wrong is 815, whose name is printed under the logo
-(`$1,000,000 JACKPOTLS8S`).
-
-Inventory rows are read against the printed `Game Name Int Rec Act Set` header:
-every number in the Game column opens a row, even when its counts are unreadable,
-and counts are binned to the column they sit under. A count blob such as
-`005000-000` or `000-00500000` + `1` is split at three digits a column.
-
-PP-OCR's recogniser is unreliable about spaces, so `read_receipt.py` restores
-them from the pixels: a column gap of at least 0.32 × cap height between inked
-glyphs is a space. Lines in the inventory's Name column are also re-read at 3×
-and 4×, and a character is only replaced when every re-read agrees.
-
-Two things had to be fixed before PP-OCR could win, and both came from the same
-property: its recogniser returns a whole line as one string and is unreliable
-about spaces.
-
-- `881-023234 DIAMONDS & GOLD` comes back as `881-023234DIAMONDS&GOLD`, so no
-  token matches a pack code and the row is dropped. Settlements scored 11 of 25
-  until the pack code was peeled off the front.
-- `\d{3}-\d{5,8}` is greedy, so where the name starts with digits it swallowed
-  them: `833-129986` glued to `200X THE CASH` matched entirely as
-  `833-12998620` — still a *valid* pack code, so it passed silently with the
-  wrong value. The cut length is taken from the codes the page got cleanly.
+The recogniser knows nothing about any layout: it does not look for header text,
+pack codes or dates, and it cuts a line only at whitespace. What a row, a column
+or a title is comes from the readers in `python/reader/`, from where the page's
+figures and text sit.
 
 **Ensembling has to merge rows, not words.** Pooling two passes' words is the
 obvious approach and destroys the result — every line appears twice at slightly
@@ -136,7 +111,8 @@ the repo root:
 .venv/bin/python python/serve.py --warm
 ```
 
-The page calls `/read` on its own host. Vite forwards that to `127.0.0.1:8756`.
+The page calls `/document`, `/lottery`, `/bank`, `/export` and `/page` on its own host. Vite
+forwards those to `127.0.0.1:8756`.
 `--warm` builds the models at startup rather than on the first read, which
 otherwise costs about 25 seconds on the first receipt.
 
@@ -146,9 +122,9 @@ core, so two at once would only make both slower and double the memory. Up to
 answers 503 and the file can be sent again.
 
 ```
-browser: the file → POST /document
+browser: the file → POST /document, /lottery or /bank (the document type you chose)
 python:  a PDF's text layer, or watermark suppression → PP-OCR → word boxes
-         → glyphs joined → columns → rows → the receipt's own checks
+         → glyphs joined, each word cut to its ink → columns → rows → the page's own checks
 browser: draws the rows
 ```
 
@@ -211,13 +187,15 @@ differently.
 The way to no-failing-rows is not a better engine but not depending on the engine
 alone:
 
-- **Algebra.** The `TOTALS` row states each column's sum. With exactly one
-  unreadable value in a column it is solved rather than guessed:
-  `missing = total − sum(readable)`. `solve_inventory_counts` in
-  `python/reader/validate.py` does this and reports each fill as
-  `inventory-solved`; counts it cannot solve stay empty under `inventory-unread`.
+- **Arithmetic.** A page restates its own figures: a totals row states each column's
+  sum, a count under the rows says how many there are, a bank statement's balance
+  follows from row to row. `python/reader/validate.py` and `python/reader/bank/checks.py`
+  hold a reading to those and name the rows that disagree. They do not fill a figure in:
+  a value that was not read stays empty and flagged.
 - **Targeted re-read.** Crop a failing row at high resolution and read it again
-  with a digits-only charset. Cheap: it is a handful of rows, not the page.
+  with a digits-only charset. Cheap: it is a handful of rows, not the page. An earlier
+  version re-read inventory names and voted; it found the names by their header text,
+  so it was removed rather than kept as a layout assumption.
 - **Ensemble**, as above.
 - **Flag the remainder** rather than emitting a confident guess.
 

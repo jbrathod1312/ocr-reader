@@ -10,13 +10,9 @@ from __future__ import annotations
 
 import re
 
-DATE = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$")
-
 
 def token_core(text: str) -> str:
     return re.sub(r"^[,:;]+|[,:;]+$", "", text.strip())
-
-
 
 
 #: Letters the recogniser puts where a digit is printed, most often under a
@@ -49,11 +45,6 @@ def restore_date_digits(token: str) -> str:
     if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
         return token
     return core.translate(_DIGIT_LOOKALIKES)
-
-
-
-def is_date(token: str) -> bool:
-    return bool(DATE.match(restore_date_digits(token)))
 
 
 def settled_date(text: str) -> str | None:

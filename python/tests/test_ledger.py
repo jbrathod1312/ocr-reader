@@ -163,7 +163,7 @@ def test_an_order_with_decimal_quantities_and_no_codes_reads_its_lines():
 
 
 def test_a_date_with_a_letter_for_a_digit_is_still_a_date():
-    from reader.dates import is_date, settled_date
+    from reader.dates import restore_date_digits, settled_date
 
     # Whichever digit the recogniser swaps for a letter, not only 0 and 1.
     for misread, date in (
@@ -178,12 +178,12 @@ def test_a_date_with_a_letter_for_a_digit_is_still_a_date():
         ("O5/1S726", "05/15/26"),
     ):
         assert settled_date(misread) == date, misread
-    assert is_date("O5/1S/26")
+    assert restore_date_digits("O5/1S/26") == "05/15/26"
 
 
 def test_text_with_slashes_is_not_turned_into_a_date():
-    from reader.dates import is_date, settled_date
+    from reader.dates import restore_date_digits, settled_date
 
     for text in ("LOTTO/OIL/XX", "SO/ZZ/TT", "lo/ll/ll", "IS/OS/BS", "ABC/DEF123", "TOLL"):
-        assert not is_date(text), text
+        assert restore_date_digits(text) == text, text
         assert settled_date(text) is None, text

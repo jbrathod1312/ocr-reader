@@ -1,12 +1,12 @@
 # OCR reader
 
-Reads lottery retailer receipts from a photo — the Instant Inventory Summary, the weekly
-Pack Settlements list, and the Weekly Invoice — and returns their rows as JSON, keyed by the
-column headers the ticket itself prints:
+Reads a table out of a PDF, a scan or a photograph — an invoice, an order, a lottery
+retailer's weekly paperwork, a bank statement — and returns its rows as JSON, keyed by the
+column titles the page itself prints:
 
 ```json
 {
-  "kind": "inventory",
+  "kind": "table",
   "headers": ["Game", "Name", "Int", "Rec", "Act", "Set"],
   "rows": [
     {
@@ -21,9 +21,15 @@ column headers the ticket itself prints:
 }
 ```
 
-Games rotate, so there is no game catalog: the printed header and the Game column are the
-schema. Every printed game becomes a row. Counts are either read, solved from the TOTALS
-row when exactly one in a column is unreadable, or left empty and flagged — never dropped.
+Nothing about a page is built in: there is no catalog of games or fields, no fixed column
+names and no fixed number of columns. The page's own titles are the schema (a page that
+prints none has blank titles, and the export names those columns by their place). Every row
+that is read is kept; a figure that does not agree with the page's own arithmetic is flagged,
+never dropped.
+
+**You say what the document is.** The app has a *Document type* choice — receipt / invoice,
+lottery, or bank statement — and the choice picks the reader. Nothing guesses, and changing
+it clears what was uploaded.
 
 ## Layout
 
@@ -48,7 +54,8 @@ pnpm --dir frontend install
 pnpm --dir frontend dev                    # the app, on http://localhost:5173
 ```
 
-The page calls `/document`, `/export` and `/page` on its own host. Vite forwards those to the Python server.
+The page calls `/document`, `/lottery`, `/bank`, `/export` and `/page` on its own host. Vite
+forwards those to the Python server.
 `serve.py` is the reader: without it the app says so and reads nothing, because there is no
 second reader to fall back to. See [`python/README.md`](python/README.md) for the engine and
 its scores.
@@ -130,9 +137,9 @@ balancer rather than raising the queue.
 ## How it works
 
 ```
-browser: the file → POST /document
+browser: the file → POST /document, /lottery or /bank (the document type you chose)
 python:  PDF text layer, or watermark suppression → PP-OCR → word boxes
-         → glyphs joined → columns → rows → the receipt's own checks
+         → glyphs joined, each word cut to its ink → columns → rows → the page's own checks
 browser: draws the rows, and GET /page for the picture of each PDF page
          → POST /export for the CSV or JSON, shaped by the reader
 ```
@@ -147,18 +154,22 @@ curl -s --data-binary @invoice.pdf 'http://127.0.0.1:8756/document?format=json'
 A page is read from the PDF's own text where it has one, because that text is exact and a
 recogniser's is not; a scan or a photograph is recognised, and only those pages pay for it.
 
-- **`reader/columns.py`** takes a table's layout from the page: the printed titles say
-  which column is which, and the rows say where one ends and the next begins.
-- **`reader/rows.py`** finds the printed `Game Name Int Rec Act Set` header and reads every
-  row against its columns. Run-together count blobs such as `005000-000` are split three
-  digits a column.
-- **`reader/glyphs.py`** joins the glyphs a recogniser returns one at a time. On a
-  line-printer face `144732` comes back as `1 4 4 7 3 2`, and every column rule reads the
-  layout from where words start.
-- **`reader/validate.py`** checks each receipt against its own arithmetic: inventory
-  columns against TOTALS, the settlement count against `Packs Total Settled`, the invoice
-  header lines against `TOTAL DUE`. Anything solved or unreadable is listed above the
-  table and its row highlighted.
+- **`reader/columns.py`** is the general table reader: it takes a table's layout from the
+  page — the printed titles say which column is which, and the rows say where one ends and
+  the next begins. Any table, in any layout.
+- **`reader/lottery/`** reads a lottery page as the table it holds. It assumes no layout: rows
+  are found from where the page's figures line up, columns from the positions most rows
+  start or end a word at, titles from what is printed over them. A totals row is the row
+  whose figures equal the others' sums, found by arithmetic, not by what it is called.
+- **`reader/bank/`** reads a bank statement: rows start at a date, which column is the running
+  balance and which way each other column moves it is worked out from the arithmetic, and
+  every row is checked against the balance beside it.
+- **`reader/glyphs.py`** joins the glyphs a recogniser returns one at a time (on a
+  line-printer face `144732` comes back as `1 4 4 7 3 2`), then cuts each word's box to its
+  own ink, so the gaps between words and columns are real, as they are in a PDF.
+- **`reader/validate.py`** holds a reading to its own arithmetic without knowing what
+  anything is called: a totals row against the sums, a count stated under the rows against
+  the rows read, a figure printed twice, a total against the lines above it.
 - **Several tables on a page** are read as several tables. An invoice prints its items, and
   under them something like `Previous Balances` with titles of its own; reading the second
   under the first's columns filed its dates as descriptions. Each extra table is shown under
@@ -175,15 +186,18 @@ python/
   reader/
     boxes.py            the word box, and grouping words into lines
     pdf_text.py         a PDF's own text, and rendering its pages
-    glyphs.py           joining the glyphs a recogniser splits
-    columns.py          a multi-column table, read off its printed titles
-    rows.py             the lottery readers: inventory, settlements, invoice
-    validate.py         each receipt against its own arithmetic
-    assemble.py         which kind of page this is, and its reading
+    glyphs.py           joining a recogniser's glyphs, and cutting each word to its ink
+    dates.py            dates as a page prints them, and as a recogniser misreads them
+    columns.py          the general table reader, off a page's printed titles
+    skipped.py          what a line the table reader left out actually is
+    lottery/            a lottery page as the table it holds: rows, columns, checks
+    bank/               a bank statement: rows at dates, balance found by arithmetic
+    validate.py         a reading against the page's own arithmetic
+    assemble.py         the general reading of a page, and its result type
     document.py         a whole file in, every page's reading out
     export.py           every page as one CSV or JSON, tables and log beside it
-  tests/                the export, case by case
-  serve.py              the server: POST /document, POST /export, GET /page
+  tests/                the readers and the export, case by case
+  serve.py              the server: POST /document, /lottery, /bank, /export, GET /page
   read_receipt.py       the PP-OCR engine
   check_corpus.py       every document you keep, against how it last read
 frontend/src/

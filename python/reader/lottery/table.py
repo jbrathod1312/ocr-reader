@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from ..boxes import WordBox, group_into_lines, line_band, median
+from ..boxes import WordBox, median
 from ..dates import settled_date
 
 
@@ -48,8 +48,6 @@ class Table:
     rows: list[list[WordBox]] = field(default_factory=list)  # one line of words per row
     blocks: list[Block] = field(default_factory=list)
     cells: list[list[str]] = field(default_factory=list)
-    labels: list[str] = field(default_factory=list)
-    header_words: list[WordBox] = field(default_factory=list)
     #: The words of each cell, row by row: what `cells` was made from.
     cell_words: list[list[list[WordBox]]] = field(default_factory=list)
     title: str | None = None
@@ -63,11 +61,6 @@ def _merge(spans: Sequence[tuple[float, float]], slack: float) -> list[list[floa
         else:
             merged.append([start, end])
     return merged
-
-
-def _lines(words: Sequence[WordBox]) -> list[list[WordBox]]:
-    usable = [w for w in words if w.text.strip() and w.width > 0 and w.height > 0]
-    return sorted(group_into_lines(usable, 0.5), key=lambda line: line_band(line).top)
 
 
 #: What figures are written with, whatever column they are in.

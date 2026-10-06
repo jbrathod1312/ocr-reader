@@ -45,11 +45,6 @@ def text_layer_is_usable(words: Sequence[WordBox]) -> bool:
     return len(words) >= 8 and characters >= 40
 
 
-def _rotated(span_dir: tuple[float, float]) -> bool:
-    """A run set down the margin is not a table cell; the app drops those."""
-    return abs(span_dir[1]) > 0.35
-
-
 def _without_overprints(words: Sequence[WordBox]) -> list[WordBox]:
     """
     Drop a word drawn a second time on top of the first.
