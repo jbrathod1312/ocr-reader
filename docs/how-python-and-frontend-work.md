@@ -129,6 +129,20 @@ statement with its titles in another language, or none at all, reads the same:
 - **Totals** are figures printed under the rows with nothing in the balance
   column. They are held against what the rows add up to.
 
+Above the rows the app shows only figures the statement itself prints — the
+totals under its rows and the balance on its newest row. The opening balance the
+checks work out (the oldest row's printed balance with that row's own amount
+undone) stays in the summary for the arithmetic and is not displayed: a figure
+the page does not carry would be read as one it does.
+
+What the arithmetic worked out travels on to the browser in the `statement`
+summary, as `columns`: which cell is the date, which is the running balance, and
+which are money in and money out. The table draws a statement as the ledger it
+is — the balance is the column the eye lands on, money in reads as money in, and
+the amount a row does not use is left blank with a dash, because that is how the
+page prints it and not because a reading went missing. Where the columns are not
+known the table falls back to what it draws for any other page.
+
 Row by row, each balance must follow from the one beside it, so a misread digit
 breaks the proof and names the row to look at. The checks come back as ordinary
 validation issues (`bank-balance`, `bank-totals`), so the viewer flags the rows
@@ -185,6 +199,7 @@ layer is a token has to be recognised, and only those pages pay for it.
 | `reader/skipped.py`  | What a line the table reader left out actually is.                    |
 | `reader/lottery/`    | A lottery page as the table it holds: rows and columns from the figures, checks. |
 | `reader/bank/`       | A bank statement: ledger, rows at dates, the running-balance checks.  |
+| `reader/confusables.py` | Digits read as letters, put right by the page's own typeface.     |
 | `reader/validate.py` | A reading against the page's own arithmetic.                          |
 | `reader/assemble.py` | The general reading of a page, and the result type every reader returns. |
 | `reader/document.py` | A whole file in, every page's reading out.                            |

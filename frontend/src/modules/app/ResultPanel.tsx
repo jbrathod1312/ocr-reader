@@ -100,6 +100,7 @@ export function ResultPanel({ session }: { session: ReceiptSession }) {
               onRemoveRowPage={onRemoveRowPage}
               removed={removed}
               onOpenPage={isPdfMode ? switchPdfPage : undefined}
+              statement={statement}
             />
           </div>
         </div>

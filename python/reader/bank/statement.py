@@ -26,6 +26,7 @@ from ..document import PageReading, Recogniser, _recognised, load_image_pixels, 
 from ..pdf_text import DPI, read_pdf, render_page, text_layer_is_usable
 from .checks import Audit, Roles, Txn, audit, infer_roles, txn_from
 from .columns import Column, Group, cells_of, clean, induce_columns, make_groups, usable
+from .fields import Field, read_fields
 from .labels import read_labels
 from .money import format_money, is_money, parse_money
 
@@ -156,6 +157,14 @@ def read_pages(pages: Sequence[_Page]) -> tuple[list[PageReading], dict[str, Any
         leftovers = kept
         rows.sort(key=lambda r: (r.page, r.group.top))
 
+    # What the page prints beside its table: the head of a statement is fields,
+    # and a field is by definition not a row, so the rows go first and the
+    # fields are read from what they leave.
+    taken = {id(w) for r in rows for w in r.group.words} | title_ids
+    details: list[Field] = []
+    for page in pages:
+        details += read_fields([w for w in page.words if id(w) not in taken], height, page.number)
+
     readings: list[PageReading] = []
     txns: list[Txn] = []
     per_page: dict[int, list[_Row]] = {p.number: [] for p in pages}
@@ -234,7 +243,7 @@ def read_pages(pages: Sequence[_Page]) -> tuple[list[PageReading], dict[str, Any
                 words=list(page.words),
             )
         )
-    return readings, _summary(rows, date_column, roles, report)
+    return readings, _summary(rows, date_column, money, roles, report, details)
 
 
 def page_left(body_left: dict[int, float], page: int) -> float | None:
@@ -276,7 +285,14 @@ def _result(
     )
 
 
-def _summary(rows: Sequence[_Row], date_column: int | None, roles: Roles | None, report: Audit) -> dict[str, Any]:
+def _summary(
+    rows: Sequence[_Row],
+    date_column: int | None,
+    money_columns: Sequence[int],
+    roles: Roles | None,
+    report: Audit,
+    details: Sequence[Field],
+) -> dict[str, Any]:
     def money(value: Decimal | None) -> str | None:
         return format_money(value) if value is not None else None
 
@@ -284,8 +300,18 @@ def _summary(rows: Sequence[_Row], date_column: int | None, roles: Roles | None,
     known = roles is not None
     return {
         "transactions": len(rows),
+        # The fields printed beside the rows, as printed. A head repeated on
+        # every page is one field to whoever reads it, so it is said once.
+        "details": _once([{"label": f.label, "value": f.value, "page": f.page} for f in details]),
         "firstDate": dates[0] if dates else None,
         "lastDate": dates[-1] if dates else None,
+        # Which way the rows run, so a date range reads earliest to latest
+        # whichever end of the month the statement starts at.
+        "newestFirst": roles.descending if roles else None,
+        # What the arithmetic showed each column to be, as an index into the
+        # row's cells. The reading is the same either way; this is only so the
+        # table can draw a balance as a balance and a blank credit as a blank.
+        "columns": _roles_by_column(date_column, money_columns, roles),
         "debits": money(report.money_out) if known else None,
         "credits": money(report.money_in) if known else None,
         "openingBalance": money(report.opening),
@@ -299,3 +325,38 @@ def _summary(rows: Sequence[_Row], date_column: int | None, roles: Roles | None,
             "credits": money(report.stated_in),
         },
     }
+
+
+def _roles_by_column(
+    date_column: int | None,
+    money_columns: Sequence[int],
+    roles: Roles | None,
+) -> dict[str, Any]:
+    """
+    What each column does, by its place among the row's cells.
+
+    `Roles` counts in money columns, since the arithmetic only ever sees those;
+    the page draws whole rows, so the indices are mapped back here and nowhere
+    else. Empty where no column could be shown to be a running balance: then
+    nothing is known, and saying so is better than a guess.
+    """
+    if roles is None:
+        return {"date": date_column, "balance": None, "credits": [], "debits": []}
+    return {
+        "date": date_column,
+        "balance": money_columns[roles.balance],
+        "credits": sorted(money_columns[c] for c, sign in roles.signs.items() if sign > 0),
+        "debits": sorted(money_columns[c] for c, sign in roles.signs.items() if sign < 0),
+    }
+
+
+def _once(details: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The fields in printed order, each said once however often it is printed."""
+    seen: set[tuple[str, str]] = set()
+    kept: list[dict[str, Any]] = []
+    for detail in details:
+        key = (detail["label"], detail["value"])
+        if key not in seen:
+            seen.add(key)
+            kept.append(detail)
+    return kept

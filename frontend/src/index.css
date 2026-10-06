@@ -393,6 +393,51 @@ button {
   min-width: 0;
 }
 
+/*
+ * The picture stays in view while the rows scroll past it.
+ *
+ * The rows are the long side of the page and the picture is what they are
+ * checked against, so a reader scrolling a long table should not have to scroll
+ * back up to see the page a row came from. Only where the two sit side by side:
+ * in one column there is nothing beside it to stay level with.
+ *
+ * It sticks under the header (53px, itself sticky) with a little air. The picture
+ * is sized to the window, so the whole column — mode switch, picture, pager,
+ * thumbnails — fits in view instead of its lower half sinking out of reach; and
+ * on a window too short even for that, the column scrolls within itself rather
+ * than being cut off.
+ */
+@media (min-width: 900px) {
+  .stack--sticky {
+    --sticky-top: 69px;
+    position: sticky;
+    top: var(--sticky-top);
+    align-self: start;
+    max-height: calc(100vh - var(--sticky-top) - 16px);
+    max-height: calc(100dvh - var(--sticky-top) - 16px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    /* Overflow would clip the cards' shadows at the edges; this gives them room. */
+    padding: 4px 8px 14px;
+    margin: -4px -8px -14px;
+  }
+
+  /* Not shrunk to fit: the viewer card clips what overflows it, so a card squeezed
+     below its own height would hide its thumbnails instead of letting the column
+     scroll to them. */
+  .stack--sticky > * {
+    flex-shrink: 0;
+  }
+
+  /* The picture takes what the window has left once the header (69px with its air),
+     the bottom margin (16px) and everything in the column that is not the picture
+     (mode switch, tabs, pager, thumbnails, file name: about 390px) are taken out. */
+  .stack--sticky .viewer-stage {
+    max-height: max(240px, calc(100vh - 480px));
+    max-height: max(240px, calc(100dvh - 480px));
+  }
+}
+
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -1272,9 +1317,128 @@ button {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/*
+ * The switch that lets the table be typed into.
+ *
+ * A reading is read far more often than it is corrected, so the table is a
+ * table until someone says otherwise. The switch carries its own state in its
+ * colour as well as in the knob, because a control whose only difference is
+ * where a dot sits is one people check twice.
+ */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.switch:hover {
+  border-color: var(--border-strong);
+  color: var(--text-body);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch__track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  transition: background 120ms ease;
+}
+
+.switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  transition: transform 120ms ease;
+}
+
+.switch--on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.switch--on .switch__track {
+  background: var(--accent);
+}
+
+.switch--on .switch__knob {
+  transform: translateX(11px);
+}
+
+/* A table that takes corrections says so in its cells, not only in the switch. */
+.fields--editing .cell-input {
+  border-bottom-color: var(--border);
+}
+
 .cell-input--empty {
   border: 1px dashed var(--err-border);
   background: var(--err-soft);
+}
+
+/*
+ * A statement's amounts and its running balance.
+ *
+ * Which column is which was found by the reader's arithmetic, so the table can
+ * say it: money in reads as money in, and the balance — the one figure a reader
+ * checks a statement against — is the column the eye lands on. The amount the
+ * row does not use is left blank with a dash for a placeholder, because that is
+ * how the statement prints it; the pink of a missing reading would otherwise be
+ * on half the cells of every page and mean nothing.
+ */
+.cell-input--in {
+  color: var(--ok-text);
+}
+
+.cell-input--out {
+  color: var(--text);
+}
+
+.fields th.th--balance {
+  color: var(--text-body);
+}
+
+.fields td.td--balance {
+  background: var(--bg-sunken);
+}
+
+.fields td.td--balance .cell-input {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* The tone of a row the checks are unsure of outranks the ledger's own colours. */
+.fields__row--low td.td--balance,
+.fields__row--flagged td.td--balance,
+.fields__row--edited td.td--balance {
+  background: transparent;
+}
+
+.fields__row--low .cell-input--in,
+.fields__row--flagged .cell-input--in,
+.fields__row--low td.td--balance .cell-input,
+.fields__row--flagged td.td--balance .cell-input {
+  color: inherit;
 }
 
 .cell-input--low {
@@ -2452,14 +2616,26 @@ dialog.confirm::backdrop {
 .statement {
   display: grid;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
   border-bottom: 1px solid var(--border);
+  background: linear-gradient(to bottom, var(--bg-sunken), transparent);
 }
 
 .statement__checks {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+/* How many rows and over what dates: the quietest thing said here. */
+.statement__period {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .statement__chip {
@@ -2487,22 +2663,85 @@ dialog.confirm::backdrop {
 .statement__facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 20px;
+  align-items: center;
+  gap: 2px 14px;
   margin: 0;
 }
 
+/*
+ * One figure of the statement, as the statement prints it.
+ *
+ * Set out as a tile each rather than a line of labels, because these are the
+ * figures a reader checks the page against and they are read across, not down.
+ */
 .statement__fact {
-  display: flex;
-  gap: 6px;
+  display: grid;
+  gap: 1px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 
 .statement__fact dt {
   color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .statement__fact dd {
   margin: 0;
   font-family: var(--mono);
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The fields printed beside the rows: an account number, the balances a page
+ * states for itself. Quieter than the totals, which are the figures the rows
+ * are held against, and set in a line so a head of a dozen fields costs the
+ * table two rows of height rather than a dozen.
+ */
+.statement__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin: 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.statement__detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.statement__detail dt {
+  color: var(--text-muted);
+}
+
+.statement__detail dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Money in, told from money out at a glance. */
+.statement__fact--in dd {
+  color: var(--ok-text);
+}
+
+@media (max-width: 720px) {
+  .statement__period {
+    margin-left: 0;
+  }
 }

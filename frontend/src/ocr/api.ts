@@ -46,14 +46,62 @@ export interface ExtraTable {
  */
 export type DocumentMode = 'receipt' | 'lottery' | 'bank'
 
+/**
+ * What part each column plays, by its place among a row's cells.
+ *
+ * Found by the reader's arithmetic and not by what the column is called, so it
+ * is as good as the statement's own balance: where no column could be shown to
+ * be a running balance, nothing is claimed and every list is empty.
+ */
+export interface StatementColumns {
+  /** The dates column, or null where the rows carry none. */
+  date: number | null
+  /** The running balance, or null where the figures are not a ledger. */
+  balance: number | null
+  /** Columns whose figures add to the balance: money in. */
+  credits: number[]
+  /** Columns whose figures take from it: money out. */
+  debits: number[]
+}
+
+/** Nothing known about the columns: what an unreadable ledger comes to. */
+export const NO_COLUMNS: StatementColumns = { date: null, balance: null, credits: [], debits: [] }
+
+/**
+ * One field printed beside the table, as printed.
+ *
+ * Found by punctuation and position — a colon ends a label, and the value is
+ * what follows it — so nothing here is keyed to a particular bank's wording,
+ * and nothing is made of what a field means.
+ */
+export interface StatementDetail {
+  label: string
+  value: string
+  /** 1-based page it is printed on, as the document numbers its pages. */
+  page: number
+}
+
 /** What a bank statement says about itself, and whether its rows agree. */
 export interface StatementSummary {
   transactions: number
+  /** The fields printed beside the rows, in printed order, each said once. */
+  details: StatementDetail[]
   firstDate: string | null
   lastDate: string | null
+  /** Whether the rows run newest first, so a date range can be printed in order. */
+  newestFirst: boolean | null
+  columns: StatementColumns
+  /** What the rows read add up to. The page prints its own in `stated`. */
   debits: string | null
   credits: string | null
+  /**
+   * The balance the rows start from: worked out by undoing the oldest row's own
+   * amount from the balance printed beside it, since a statement rarely prints
+   * one. Part of the checks, and not shown — the summary shows only figures the
+   * statement itself prints.
+   */
   openingBalance: string | null
+  /** The balance printed on the newest row read. */
   closingBalance: string | null
   /** `ok` when every printed balance follows from the one beside it. */
   balanceCheck: 'ok' | 'broken' | 'unchecked'
@@ -218,7 +266,15 @@ export async function readDocument(
 
   return {
     extraTables: body.extraTables ?? [],
-    statement: body.statement ?? null,
+    // The column roles are the newest thing the reader says about a statement;
+    // a reader that has not been restarted sends a summary without them.
+    statement: body.statement
+      ? {
+          ...body.statement,
+          columns: body.statement.columns ?? NO_COLUMNS,
+          details: body.statement.details ?? [],
+        }
+      : null,
     release: () => {
       if (local) URL.revokeObjectURL(local)
     },

@@ -192,10 +192,47 @@ alone:
   follows from row to row. `python/reader/validate.py` and `python/reader/bank/checks.py`
   hold a reading to those and name the rows that disagree. They do not fill a figure in:
   a value that was not read stays empty and flagged.
-- **Targeted re-read.** Crop a failing row at high resolution and read it again
-  with a digits-only charset. Cheap: it is a handful of rows, not the page. An earlier
-  version re-read inventory names and voted; it found the names by their header text,
-  so it was removed rather than kept as a layout assumption.
+- **The page's own typeface.** `python/reader/confusables.py`. `5` and `S`, `0` and `O`
+  are a stroke apart in a line-printer face, and a recogniser gives one answer per
+  glyph with no sign of how close the call was: the inventory photo reads `50X` as
+  `SOX` at 0.95 confidence, and the same printed word three rows down as `50X`.
+  Asking the recogniser again does not help — cropped and re-read it is right for one
+  word and wrong for the next, and a frame that fixes `FIERY 5S` turns `LUCKY 7S` into
+  `LUCKY 75` (tried, measured, removed): a second opinion from a model with the same bias
+  is the same opinion.
+
+  What the page does hold is the answer. It prints dozens of `5`s (`850`, `005`) and dozens
+  of `S`s (`CASH`, `BUCKS`) on the same machine, so a doubtful glyph is compared by shape
+  with those, and only those. Glyphs are cut out of the brightest colour plane, where paper
+  and a tinted shape behind the row are both light, so the overlay disappears without anything
+  knowing it is there.
+
+  **Nothing is keyed to a word, and there is no table of which letter resembles which
+  digit.** The pairs are the ones this page's own glyphs show to be alike: its average `5`
+  is nearer its average `S` than any other letter, and the reverse. A typeface that
+  confuses other marks gives other pairs (the same photographs also yield `4/A` and `7/T`),
+  and a page with too few digits or letters to compare gives none, so nothing changes.
+
+  Two things keep it honest. A glyph changes only when its five nearest neighbours on the
+  page all agree, so a glyph that looks like neither is left as read. And a pair is only
+  used on a page that has shown it can tell the two apart: each exemplar is classified by the
+  others and the pair is trusted only if those calls were right 97% of the time. A typeface
+  where `0` and `O` are one shape is left alone, and the page says so itself.
+
+  What is still fixed, because it is the question rather than the answer: the *kind* of
+  mistake looked for (a digit taken for a letter, in a word with a digit beside it or two
+  lookalikes at an end) and the numbers that decide how sure the page must be. Removing the
+  first was tried and measured: with no restriction the page's glyphs also rewrite `L` as
+  `l`, `$500` as `$50C` and `NOT` as `N0T`, wherever a word is set in a different size or
+  face than its teachers, and every threshold that stops those also stops real fixes
+  (`X5OHIGH`), so it would only move a hidden condition somewhere harder to see.
+
+  The same ink gives back spaces the recogniser swallowed, in any word: a gap wider than the
+  word's own letter gaps, where the text holds no printed point to explain it, is a space. A
+  gap beside a narrow glyph (a `1`, an `i`) or in a word too short to say what a normal gap
+  is has to be much wider, since a narrow glyph is mostly air. No OCR call is made, so it
+  costs milliseconds. An earlier version re-read inventory names and voted; it
+  found the names by their header text, and was removed for that.
 - **Ensemble**, as above.
 - **Flag the remainder** rather than emitting a confident guess.
 
