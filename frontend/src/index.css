@@ -128,6 +128,79 @@ body {
   min-height: 100vh;
 }
 
+/*
+ * Scrollbars take their room whether or not there is anything to scroll.
+ *
+ * Where a scrollbar takes space (Windows, Linux, and macOS set to always show
+ * them) it appears when content outgrows its box and leaves when it shrinks, and
+ * each time the box's width changes by the bar's width: uploading a file, opening
+ * `View More`, or paging between pictures of different heights shoves everything
+ * sideways and re-wraps it. Reserving the gutter up front means the bar arrives
+ * in room that was already there. Where scrollbars overlay the content (macOS
+ * by default) the gutter is zero and this does nothing.
+ *
+ * Listed, not `*`: the gutter also applies to every `overflow: hidden` box, and
+ * the app has a dozen of those for ellipsis, none of which has a bar to reserve
+ * for. And only boxes that scroll up and down: a sideways bar sits at the foot,
+ * which is not width. The page, the picture's frame, the sticky column and the
+ * dock panel are the ones that do; a new vertical scroller is added here.
+ */
+html,
+.viewer-stage,
+.dock-panel__body {
+  scrollbar-gutter: stable;
+}
+
+/*
+ * One slim scrollbar for the whole app.
+ *
+ * The browser's own is 15-17px, which on a page whose cards sit 20px apart is a
+ * second gutter, and with the gutter reserved above it is paid for whether or not
+ * there is anything to scroll. This one is `--scrollbar` wide with a thumb a
+ * little narrower than its track, in the page's own greys so it follows the
+ * theme.
+ *
+ * Chromium and Safari are given it as styled bars; Firefox has no such thing and
+ * is given its own `thin`. They are kept apart on purpose: in Chromium a
+ * `scrollbar-width` anywhere takes the width away from the styled bar, which is
+ * why no rule elsewhere in this file sets it.
+ */
+:root {
+  --scrollbar: 10px;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar {
+    width: var(--scrollbar);
+    height: var(--scrollbar);
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    /* The border is the air round the thumb: 10px track, 6px thumb. */
+    border: 2px solid transparent;
+    border-radius: var(--radius-full);
+    background: var(--text-faint);
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    background-clip: content-box;
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-faint) transparent;
+  }
+}
+
 body {
   background-color: var(--bg);
   color: var(--text-body);
@@ -416,7 +489,7 @@ button {
     max-height: calc(100vh - var(--sticky-top) - 16px);
     max-height: calc(100dvh - var(--sticky-top) - 16px);
     overflow-y: auto;
-    scrollbar-width: thin;
+    scrollbar-gutter: stable;
     /* Overflow would clip the cards' shadows at the edges; this gives them room. */
     padding: 4px 8px 14px;
     margin: -4px -8px -14px;
@@ -1042,7 +1115,6 @@ button {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  scrollbar-width: thin;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-raised);
@@ -1627,6 +1699,8 @@ button {
 }
 
 .viewer-stage:fullscreen {
+  /* Centred on the screen: a reserved edge would push the page off centre. */
+  scrollbar-gutter: auto;
   max-height: none;
   border-radius: 0;
   display: grid;
