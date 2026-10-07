@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
-
 @dataclass(slots=True)
 class ValidationIssue:
     code: str
@@ -29,31 +28,10 @@ class ValidationIssue:
     rows: list[int]
 
 
-def cents(text: str) -> int | None:
-    """Money as an integer number of cents, or None when the text is not an amount."""
-    token = re.sub(r"[$,\s]", "", text.strip())
-    credit = bool(re.search(r"[cC]$", token))
-    body = token[:-1] if credit else token
-    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", body):
-        return None
-    value = math.floor(float(body) * 100 + 0.5)
-    if not math.isfinite(value):
-        return None
-    return -value if credit else value
-
-
 def money(value: int) -> str:
     sign = "-" if value < 0 else ""
     magnitude = abs(value)
     return f"{sign}{magnitude // 100}.{magnitude % 100:02d}"
-
-
-def count(text: str) -> int | None:
-    """A count column, or None when the reader mangled it past use."""
-    token = text.strip()
-    if not re.fullmatch(r"\d{1,3}", token):
-        return None
-    return int(token)
 
 
 def _number(text: str) -> int | None:

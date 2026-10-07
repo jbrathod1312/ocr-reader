@@ -129,6 +129,20 @@ statement with its titles in another language, or none at all, reads the same:
 - **Totals** are figures printed under the rows with nothing in the balance
   column. They are held against what the rows add up to.
 
+Above the rows the app shows only figures the statement itself prints — the
+totals under its rows and the balance on its newest row. The opening balance the
+checks work out (the oldest row's printed balance with that row's own amount
+undone) stays in the summary for the arithmetic and is not displayed: a figure
+the page does not carry would be read as one it does.
+
+What the arithmetic worked out travels on to the browser in the `statement`
+summary, as `columns`: which cell is the date, which is the running balance, and
+which are money in and money out. The table draws a statement as the ledger it
+is — the balance is the column the eye lands on, money in reads as money in, and
+the amount a row does not use is left blank with a dash, because that is how the
+page prints it and not because a reading went missing. Where the columns are not
+known the table falls back to what it draws for any other page.
+
 Row by row, each balance must follow from the one beside it, so a misread digit
 breaks the proof and names the row to look at. The checks come back as ordinary
 validation issues (`bank-balance`, `bank-totals`), so the viewer flags the rows
@@ -162,9 +176,9 @@ uploaded **image** is its own picture and is never asked for back.
 ## What reads what
 
 ```
-browser: the file → POST /document
+browser: the file → POST /document, /lottery or /bank (the document type you chose)
 python:  a PDF's text layer, or watermark suppression → PP-OCR → word boxes
-         → glyphs joined → columns → rows → the receipt's own checks
+         → glyphs joined, each word cut to its ink → columns → rows → the page's own checks
 browser: draws the rows, and GET /page for the picture of each PDF page
          → POST /export for the CSV or JSON, shaped by the reader
 ```
@@ -175,20 +189,21 @@ layer is a token has to be recognised, and only those pages pay for it.
 
 ### Inside the reader
 
-| Module               | What it does                                                 |
-| -------------------- | ------------------------------------------------------------ |
-| `reader/boxes.py`    | The word box, and grouping words into printed lines.         |
-| `reader/pdf_text.py` | A PDF's own text, and rendering its pages to pixels.         |
-| `reader/glyphs.py`   | Joins the glyphs a recogniser returns one at a time.         |
-| `reader/columns.py`  | A multi-column table, read off its printed titles.           |
-| `reader/rows.py`     | The lottery readers: inventory, settlements, weekly invoice. |
-| `reader/validate.py` | Each receipt against its own arithmetic.                     |
-| `reader/assemble.py` | Which kind of page this is, and its reading.                 |
-| `reader/document.py` | A whole file in, every page's reading out.                   |
-| `reader/lottery/`    | The lottery's pages: rows and columns from the figures, checks. |
-| `reader/bank/`       | A bank statement: ledger, rows at dates, the running-balance checks. |
-| `reader/export.py`   | Every page as one CSV or JSON, tables and log beside it.     |
-| `reader/skipped.py`  | What a line the table reader left out actually is.           |
+| Module               | What it does                                                          |
+| -------------------- | --------------------------------------------------------------------- |
+| `reader/boxes.py`    | The word box, and grouping words into printed lines.                  |
+| `reader/pdf_text.py` | A PDF's own text, and rendering its pages to pixels.                  |
+| `reader/glyphs.py`   | Joins the glyphs a recogniser returns one at a time, then cuts each word to its ink. |
+| `reader/dates.py`    | Dates as a page prints them, and as a recogniser misreads them.       |
+| `reader/columns.py`  | The general table reader: a table, read off its printed titles.       |
+| `reader/skipped.py`  | What a line the table reader left out actually is.                    |
+| `reader/lottery/`    | A lottery page as the table it holds: rows and columns from the figures, checks. |
+| `reader/bank/`       | A bank statement: ledger, rows at dates, the running-balance checks.  |
+| `reader/confusables.py` | Digits read as letters, put right by the page's own typeface.     |
+| `reader/validate.py` | A reading against the page's own arithmetic.                          |
+| `reader/assemble.py` | The general reading of a page, and the result type every reader returns. |
+| `reader/document.py` | A whole file in, every page's reading out.                            |
+| `reader/export.py`   | Every page as one CSV or JSON, tables and log beside it.              |
 
 ---
 
@@ -212,6 +227,10 @@ Rendering, and the two things that are the person's rather than the reader's:
   export.
 - **Dropped tables.** An extra table you remove is remembered by key and left
   out of the export's `tables`.
+- **Removed rows.** A row you remove (after confirming) is taken out of the page's
+  reading and so out of the export; *Reset edits & rows* brings the page back.
+- **The document type.** Which reader runs is the person's choice, and changing it
+  clears what was uploaded.
 
 Everything else it draws — rows, headers, the validation notes, the log of what
 was left out — arrives from the reader already shaped.

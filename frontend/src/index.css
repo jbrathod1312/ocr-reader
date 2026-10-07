@@ -9,7 +9,6 @@
   --bg: #f8fafc;
   --bg-raised: #ffffff;
   --bg-sunken: #f1f5f9;
-  --bg-subtle: #f8fafc;
 
   /* Borders */
   --border: #e2e8f0;
@@ -24,7 +23,6 @@
 
   /* Accent - Royal Indigo */
   --accent: #4f46e5;
-  --accent-hover: #4338ca;
   --accent-soft: #eef2ff;
   --accent-border: #c7d2fe;
   --accent-button: #4f46e5;
@@ -71,7 +69,6 @@
   --bg: #090d16;
   --bg-raised: #101626;
   --bg-sunken: #070a12;
-  --bg-subtle: #131b2e;
 
   /* Borders */
   --border: #1e293b;
@@ -86,7 +83,6 @@
 
   /* Accent - Vibrant Indigo */
   --accent: #6366f1;
-  --accent-hover: #818cf8;
   --accent-soft: rgba(99, 102, 241, 0.14);
   --accent-border: rgba(99, 102, 241, 0.3);
   --accent-button: #4f46e5;
@@ -130,6 +126,79 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
+}
+
+/*
+ * Scrollbars take their room whether or not there is anything to scroll.
+ *
+ * Where a scrollbar takes space (Windows, Linux, and macOS set to always show
+ * them) it appears when content outgrows its box and leaves when it shrinks, and
+ * each time the box's width changes by the bar's width: uploading a file, opening
+ * `View More`, or paging between pictures of different heights shoves everything
+ * sideways and re-wraps it. Reserving the gutter up front means the bar arrives
+ * in room that was already there. Where scrollbars overlay the content (macOS
+ * by default) the gutter is zero and this does nothing.
+ *
+ * Listed, not `*`: the gutter also applies to every `overflow: hidden` box, and
+ * the app has a dozen of those for ellipsis, none of which has a bar to reserve
+ * for. And only boxes that scroll up and down: a sideways bar sits at the foot,
+ * which is not width. The page, the picture's frame, the sticky column and the
+ * dock panel are the ones that do; a new vertical scroller is added here.
+ */
+html,
+.viewer-stage,
+.dock-panel__body {
+  scrollbar-gutter: stable;
+}
+
+/*
+ * One slim scrollbar for the whole app.
+ *
+ * The browser's own is 15-17px, which on a page whose cards sit 20px apart is a
+ * second gutter, and with the gutter reserved above it is paid for whether or not
+ * there is anything to scroll. This one is `--scrollbar` wide with a thumb a
+ * little narrower than its track, in the page's own greys so it follows the
+ * theme.
+ *
+ * Chromium and Safari are given it as styled bars; Firefox has no such thing and
+ * is given its own `thin`. They are kept apart on purpose: in Chromium a
+ * `scrollbar-width` anywhere takes the width away from the styled bar, which is
+ * why no rule elsewhere in this file sets it.
+ */
+:root {
+  --scrollbar: 10px;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  ::-webkit-scrollbar {
+    width: var(--scrollbar);
+    height: var(--scrollbar);
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    /* The border is the air round the thumb: 10px track, 6px thumb. */
+    border: 2px solid transparent;
+    border-radius: var(--radius-full);
+    background: var(--text-faint);
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    background-clip: content-box;
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-faint) transparent;
+  }
 }
 
 body {
@@ -397,6 +466,51 @@ button {
   min-width: 0;
 }
 
+/*
+ * The picture stays in view while the rows scroll past it.
+ *
+ * The rows are the long side of the page and the picture is what they are
+ * checked against, so a reader scrolling a long table should not have to scroll
+ * back up to see the page a row came from. Only where the two sit side by side:
+ * in one column there is nothing beside it to stay level with.
+ *
+ * It sticks under the header (53px, itself sticky) with a little air. The picture
+ * is sized to the window, so the whole column — mode switch, picture, pager,
+ * thumbnails — fits in view instead of its lower half sinking out of reach; and
+ * on a window too short even for that, the column scrolls within itself rather
+ * than being cut off.
+ */
+@media (min-width: 900px) {
+  .stack--sticky {
+    --sticky-top: 69px;
+    position: sticky;
+    top: var(--sticky-top);
+    align-self: start;
+    max-height: calc(100vh - var(--sticky-top) - 16px);
+    max-height: calc(100dvh - var(--sticky-top) - 16px);
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    /* Overflow would clip the cards' shadows at the edges; this gives them room. */
+    padding: 4px 8px 14px;
+    margin: -4px -8px -14px;
+  }
+
+  /* Not shrunk to fit: the viewer card clips what overflows it, so a card squeezed
+     below its own height would hide its thumbnails instead of letting the column
+     scroll to them. */
+  .stack--sticky > * {
+    flex-shrink: 0;
+  }
+
+  /* The picture takes what the window has left once the header (69px with its air),
+     the bottom margin (16px) and everything in the column that is not the picture
+     (mode switch, tabs, pager, thumbnails, file name: about 390px) are taken out. */
+  .stack--sticky .viewer-stage {
+    max-height: max(240px, calc(100vh - 480px));
+    max-height: max(240px, calc(100dvh - 480px));
+  }
+}
+
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -406,12 +520,6 @@ button {
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
-}
-
-.card--full {
-  width: 100%;
-  max-width: none;
-  overflow: visible;
 }
 
 .card__head {
@@ -691,21 +799,6 @@ button {
    Image Preview
    -------------------------------------------------------------------------- */
 
-.preview-container {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-sunken);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  transition: all 180ms ease;
-}
-
-.preview-container[hidden] {
-  display: none !important;
-}
-
 .preview-meta {
   display: flex;
   align-items: center;
@@ -758,20 +851,6 @@ button {
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
   border-radius: 9999px;
-}
-
-.reading-note {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.reading-note--action {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 /* --------------------------------------------------------------------------
@@ -1036,7 +1115,6 @@ button {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  scrollbar-width: thin;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-raised);
@@ -1287,6 +1365,26 @@ button {
   transition: all 100ms ease;
 }
 
+/*
+ * A read-only table — an extra table printed under the page's own, such as a
+ * statement's Checks or Credits list — holds plain text, not the editable
+ * inputs the primary table does, so its cells are capped here instead. Without
+ * this a Description column of sentences stretches the table past the panel and
+ * pushes its amount off the right edge; capped, it is cut short with an ellipsis
+ * and the full text is in the cell's tooltip.
+ */
+.fields--static td.col--text {
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fields--static td.col--wide {
+  max-width: clamp(16ch, 28vw, 44ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Item numbers, codes and the like. */
 .fields td.col--text .cell-input {
   max-width: 20ch;
@@ -1311,9 +1409,128 @@ button {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/*
+ * The switch that lets the table be typed into.
+ *
+ * A reading is read far more often than it is corrected, so the table is a
+ * table until someone says otherwise. The switch carries its own state in its
+ * colour as well as in the knob, because a control whose only difference is
+ * where a dot sits is one people check twice.
+ */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.switch:hover {
+  border-color: var(--border-strong);
+  color: var(--text-body);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch__track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  transition: background 120ms ease;
+}
+
+.switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-sm);
+  transition: transform 120ms ease;
+}
+
+.switch--on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.switch--on .switch__track {
+  background: var(--accent);
+}
+
+.switch--on .switch__knob {
+  transform: translateX(11px);
+}
+
+/* A table that takes corrections says so in its cells, not only in the switch. */
+.fields--editing .cell-input {
+  border-bottom-color: var(--border);
+}
+
 .cell-input--empty {
   border: 1px dashed var(--err-border);
   background: var(--err-soft);
+}
+
+/*
+ * A statement's amounts and its running balance.
+ *
+ * Which column is which was found by the reader's arithmetic, so the table can
+ * say it: money in reads as money in, and the balance — the one figure a reader
+ * checks a statement against — is the column the eye lands on. The amount the
+ * row does not use is left blank with a dash for a placeholder, because that is
+ * how the statement prints it; the pink of a missing reading would otherwise be
+ * on half the cells of every page and mean nothing.
+ */
+.cell-input--in {
+  color: var(--ok-text);
+}
+
+.cell-input--out {
+  color: var(--text);
+}
+
+.fields th.th--balance {
+  color: var(--text-body);
+}
+
+.fields td.td--balance {
+  background: var(--bg-sunken);
+}
+
+.fields td.td--balance .cell-input {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* The tone of a row the checks are unsure of outranks the ledger's own colours. */
+.fields__row--low td.td--balance,
+.fields__row--flagged td.td--balance,
+.fields__row--edited td.td--balance {
+  background: transparent;
+}
+
+.fields__row--low .cell-input--in,
+.fields__row--flagged .cell-input--in,
+.fields__row--low td.td--balance .cell-input,
+.fields__row--flagged td.td--balance .cell-input {
+  color: inherit;
 }
 
 .cell-input--low {
@@ -1355,12 +1572,6 @@ button {
   font-size: 11.5px;
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.fields__hint {
-  margin: 0 0 12px;
-  color: var(--text-muted);
-  font-size: 13px;
 }
 
 .empty-filter-state {
@@ -1508,6 +1719,8 @@ button {
 }
 
 .viewer-stage:fullscreen {
+  /* Centred on the screen: a reserved edge would push the page off centre. */
+  scrollbar-gutter: auto;
   max-height: none;
   border-radius: 0;
   display: grid;
@@ -1971,12 +2184,6 @@ button {
   gap: 8px;
   min-width: 0;
   color: var(--accent);
-}
-
-.card__body--code {
-  padding: 0;
-  background: var(--bg-sunken);
-  border-top: 1px solid var(--border);
 }
 
 .json-preview {
@@ -2503,14 +2710,27 @@ dialog.confirm::backdrop {
 .statement {
   display: grid;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
   border-bottom: 1px solid var(--border);
+  background: linear-gradient(to bottom, var(--bg-sunken), transparent);
 }
 
 .statement__checks {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+/* How many rows and over what dates: the quietest thing said here, on its own
+   line under the checks so it reads as their caption rather than crowding them. */
+.statement__period {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .statement__chip {
@@ -2538,22 +2758,97 @@ dialog.confirm::backdrop {
 .statement__facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 20px;
+  align-items: center;
+  gap: 2px 14px;
   margin: 0;
 }
 
+/*
+ * One figure of the statement, as the statement prints it.
+ *
+ * Set out as a tile each rather than a line of labels, because these are the
+ * figures a reader checks the page against and they are read across, not down.
+ */
 .statement__fact {
-  display: flex;
-  gap: 6px;
+  display: grid;
+  gap: 1px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 
 .statement__fact dt {
   color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .statement__fact dd {
   margin: 0;
   font-family: var(--mono);
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
+
+/*
+ * The fields printed beside the rows: an account number, the balances a page
+ * states for itself. Quieter than the totals, which are the figures the rows
+ * are held against, and set in a line so a head of a dozen fields costs the
+ * table two rows of height rather than a dozen.
+ */
+.statement__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin: 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.statement__detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.statement__detail dt {
+  color: var(--text-muted);
+}
+
+.statement__detail dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Money in, told from money out at a glance. */
+.statement__fact--in dd {
+  color: var(--ok-text);
+}
+
+.statement__fact--out dd {
+  color: var(--err-text);
+}
+
+/* Opening and closing balances: figures the statement states, not money moved. */
+.statement__fact--neutral dd {
+  color: var(--text);
+}
+
+/* The bank's name, as the letterhead prints it, over a sectioned statement. */
+.statement__bank {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+

@@ -38,7 +38,7 @@ export function TicketPanel({ session }: { session: ReceiptSession }) {
   }
 
   return (
-    <div className="stack">
+    <div className="stack stack--sticky">
       <DocumentModeToggle mode={mode} onChange={setMode} disabled={busy} />
       <ReceiptViewer
         previewRef={previewRef}

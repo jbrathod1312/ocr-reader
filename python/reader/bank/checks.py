@@ -34,9 +34,6 @@ class Roles:
     signs: dict[int, int]
     #: Whether the newest row is the first.
     descending: bool
-    #: How many neighbouring rows the arithmetic explained, and of how many.
-    explained: int
-    pairs: int
 
 
 def _delta(values: Sequence[Row], i: int, balance: int, descending: bool) -> tuple[Decimal, Row] | None:
@@ -90,7 +87,7 @@ def infer_roles(values: Sequence[Row]) -> Roles | None:
                     explained += 1
             if explained < 2 or explained / pairs < 0.6 or not signs:
                 continue
-            roles = Roles(balance, signs, descending, explained, pairs)
+            roles = Roles(balance, signs, descending)
             key = (explained, -balance)
             if best is None or key > best[0]:
                 best = (key, roles)

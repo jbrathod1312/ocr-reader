@@ -1,6 +1,11 @@
 import { Fragment, useMemo, useState } from 'react'
 
-import { requestExport, type ExportPage, type ExtraTable } from '../ocr/api'
+import {
+  requestExport,
+  type ExportPage,
+  type ExtraTable,
+  type StatementSummary,
+} from '../ocr/api'
 import { exportBaseName, saveFile } from '../lib/download'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadIcon } from './ExportButtons'
@@ -46,6 +51,12 @@ interface FieldsViewProps {
   removed?: number
   /** Show a page, from a search result's page number. */
   onOpenPage?: (pageIndex: number) => void
+  /**
+   * What a bank statement says about itself, when the document is one. Only
+   * its columns are used here: a ledger's blanks and its running balance are
+   * not what they are in a receipt, and the table draws them as what they are.
+   */
+  statement?: StatementSummary | null
 }
 
 const EMPTY = 'No table rows were read.'
@@ -111,7 +122,65 @@ function columnClass(result: OcrResult, index: number): ColumnClass {
   return index === wide ? 'col--wide' : 'col--text'
 }
 
+/**
+ * The class of each column of a bare table, read from its cells the same way.
+ *
+ * The primary table profiles an `OcrResult`; an extra table carries only its
+ * headers and rows, so it is profiled on those. Without this, every column but
+ * the first was drawn as figures, and a `Description` column of sentences — the
+ * widest thing on the page — overran the table and pushed its amount off the
+ * edge. A column of figures lines up on the right; the longest text column is
+ * the one given room to grow.
+ */
+function tableColumnClasses(headers: readonly string[], rows: readonly (readonly string[])[]): ColumnClass[] {
+  const width = Math.max(headers.length, ...rows.map((row) => row.length), 0)
+  const classes: ColumnClass[] = []
+  let wide = 0
+  let longest = -1
+  for (let column = 0; column < width; column += 1) {
+    const cells = rows.map((row) => (row[column] ?? '').trim()).filter(Boolean)
+    const figures = cells.filter((cell) => cell.split(/\s+/).every((token) => FIGURE.test(token)))
+    const numeric = cells.length > 0 && figures.length >= cells.length * 0.6
+    classes.push(numeric ? 'num' : 'col--text')
+    const mean = cells.length ? cells.reduce((sum, cell) => sum + cell.length, 0) / cells.length : 0
+    if (!numeric && mean > longest) {
+      longest = mean
+      wide = column
+    }
+  }
+  if (classes[wide] === 'col--text') classes[wide] = 'col--wide'
+  return classes
+}
+
 type ColumnClass = 'num' | 'col--text' | 'col--wide'
+
+/** Which column is the running balance, and which way each amount column moves it. */
+interface Ledger {
+  balance: number
+  /** The dates column, or -1 where the rows carry none. */
+  date: number
+  /** By column: `in` adds to the balance, `out` takes from it. */
+  amounts: ReadonlyMap<number, 'in' | 'out'>
+}
+
+/**
+ * The statement's columns as the table draws them, or null for any other page.
+ *
+ * Null as well for a statement whose figures could not be shown to be a
+ * ledger: the reader claims nothing about the columns then, and a table that
+ * coloured them anyway would be claiming it for them. A statement's pages are
+ * read under one set of columns, so one map serves every page on screen.
+ */
+const NO_AMOUNTS: ReadonlyMap<number, 'in' | 'out'> = new Map()
+
+function ledgerOf(statement: StatementSummary | null | undefined): Ledger | null {
+  const roles = statement?.columns
+  if (!roles || roles.balance === null) return null
+  const amounts = new Map<number, 'in' | 'out'>()
+  for (const column of roles.credits) amounts.set(column, 'in')
+  for (const column of roles.debits) amounts.set(column, 'out')
+  return amounts.size > 0 ? { balance: roles.balance, date: roles.date ?? -1, amounts } : null
+}
 
 /** Characters a column's cells grow to before the reading is cut short on screen. */
 const CELL_CHARS: Record<ColumnClass, number> = {
@@ -135,14 +204,26 @@ export function FieldsView({
   onRemoveRowPage,
   removed = 0,
   onOpenPage,
+  statement,
 }: FieldsViewProps) {
   const { headers } = toPublicJson(result)
   const pageRowCount = rowCells(result).length
+  const ledger = useMemo(() => ledgerOf(statement), [statement])
+  const amounts = ledger?.amounts ?? NO_AMOUNTS
 
   const [query, setQuery] = useState('')
   // The row waiting on an answer: removing it is not something to do by accident.
   const [removing, setRemoving] = useState<{ page: number; row: number } | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
+  /*
+   * Whether the table takes corrections.
+   *
+   * A reading is read far more often than it is corrected, and a table of live
+   * inputs is a table where a stray click lands in the data. Off by default:
+   * the rows are something to check against the page until someone says they
+   * are something to change.
+   */
+  const [editing, setEditing] = useState(false)
   // A long document is read a screenful at a time; the rest is one click away.
   const [expanded, setExpanded] = useState(false)
   const q = query.trim().toLowerCase()
@@ -204,7 +285,8 @@ export function FieldsView({
     if (onEditPage) onEditPage(row.page.index, row.index, cellIndex, value)
     else if (row.page.index === currentPage) onEdit?.(row.index, cellIndex, value)
   }
-  const editable = Boolean(onEditPage ?? onEdit)
+  const offered = Boolean(onEditPage ?? onEdit)
+  const editable = offered && editing
   const sameHeaders = (other: OcrResult) => other.headers.join('\u0000') === headers.join('\u0000')
 
   return (
@@ -311,6 +393,25 @@ export function FieldsView({
             {edited.size > 0 && ` · ${edited.size} edited`}
             {removed > 0 && ` · ${removed} removed`}
           </span>
+          {offered && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={editing}
+              className={`switch${editing ? ' switch--on' : ''}`}
+              onClick={() => setEditing((on) => !on)}
+              title={
+                editing
+                  ? 'Leave the rows as they are read'
+                  : 'Correct a reading by typing into the table'
+              }
+            >
+              <span className="switch__track" aria-hidden="true">
+                <span className="switch__knob" />
+              </span>
+              Edit
+            </button>
+          )}
           {(edited.size > 0 || removed > 0) && onResetEdits && (
             <button type="button" className="btn btn--sm btn--subtle" onClick={onResetEdits}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -343,13 +444,16 @@ export function FieldsView({
         </div>
       ) : (
         <div className="table-responsive">
-          <table className="fields">
+          <table className={`fields${editable ? ' fields--editing' : ''}`}>
             <thead>
               <tr>
                 {acrossPages && <th className="num th--seq th--page">Pg</th>}
                 <th className="num th--seq">#</th>
                 {headers.map((header, index) => (
-                  <th key={`${header}-${index}`} className={columnClass(result, index)}>
+                  <th
+                    key={`${header}-${index}`}
+                    className={`${columnClass(result, index)}${ledger?.balance === index ? ' th--balance' : ''}`}
+                  >
                     {header}
                   </th>
                 ))}
@@ -361,6 +465,12 @@ export function FieldsView({
                 const own = page.result
                 const ownHeaders = own.headers
                 const complete = row.cells.every((cell) => cell.trim() !== '')
+                // A statement's row says which way the money went by filling one
+                // amount column and leaving the other blank. A row with neither
+                // filled says nothing, and that is worth seeing.
+                const hasAmount = row.cells.some(
+                  (cell, index) => amounts.has(index) && cell.trim() !== '',
+                )
                 const tone =
                   row.edited && complete
                     ? 'fields__row--edited'
@@ -411,7 +521,7 @@ export function FieldsView({
                       )}
                       <td className="num td--seq" title={`Row ${originalIndex + 1}`}>
                         <span className="seq__number">{originalIndex + 1}</span>
-                        {onRemoveRowPage && (
+                        {onRemoveRowPage && editable && (
                           <button
                             type="button"
                             className="seq__remove"
@@ -434,8 +544,25 @@ export function FieldsView({
                       {row.cells.map((cell, cellIndex) => {
                         const header = ownHeaders[cellIndex] ?? ''
                         const column = columnClass(own, cellIndex)
+                        const part = amounts.get(cellIndex)
+                        /*
+                         * What a blank means on a statement, column by column.
+                         *
+                         * A transaction is paid in or paid out and not both, and
+                         * a wire transfer has no check number: most of a ledger's
+                         * blanks are the page as printed, and flagging them would
+                         * put the colour of a missing reading on half the cells of
+                         * every page. The blanks that are something missing are
+                         * the ones the ledger is made of — the date, the running
+                         * balance, and an amount on a row that carries none.
+                         */
+                        const needed =
+                          cellIndex === ledger?.balance ||
+                          cellIndex === ledger?.date ||
+                          (part !== undefined && !hasAmount)
+                        const blankOnThePage = ledger !== null && !needed
                         // A label's other cells are blank on the page, not missing.
-                        const isEmpty = cell.trim() === '' && !label
+                        const isEmpty = cell.trim() === '' && !label && !blankOnThePage
                         const isLowConfidence = confidence < reviewThreshold
                         // Cells ask for the width of their reading, up to the column's cap,
                         // so one long description cannot stretch the table past the card.
@@ -444,16 +571,16 @@ export function FieldsView({
                         return (
                           <td
                             key={`${header}-${cellIndex}`}
-                            className={column}
+                            className={`${column}${ledger?.balance === cellIndex ? ' td--balance' : ''}`}
                             title={row.edited ? 'Edited manually' : `Confidence: ${(confidence * 100).toFixed(0)}%`}
                           >
                             <input
-                              className={`cell-input${isEmpty ? ' cell-input--empty' : ''}${isLowConfidence ? ' cell-input--low' : ''}`}
+                              className={`cell-input${isEmpty ? ' cell-input--empty' : ''}${isLowConfidence ? ' cell-input--low' : ''}${part && cell.trim() ? ` cell-input--${part}` : ''}`}
                               value={cell}
                               size={width}
                               // A reading too long for its column is cut short: hover shows all of it.
                               title={cell.length > width ? cell : undefined}
-                              placeholder={label ? '' : 'empty'}
+                              placeholder={label ? '' : blankOnThePage ? '—' : 'empty'}
                               aria-label={
                                 acrossPages
                                   ? `${header}, page ${page.index + 1}, row ${originalIndex + 1}`
@@ -461,7 +588,11 @@ export function FieldsView({
                               }
                               readOnly={!editable}
                               spellCheck={false}
-                              onChange={(event) => edit(row, cellIndex, event.target.value)}
+                              // Read-only stops a person typing; this stops
+                              // anything else, so the switch is the one way in.
+                              onChange={(event) =>
+                                editable && edit(row, cellIndex, event.target.value)
+                              }
                             />
                           </td>
                         )
@@ -533,12 +664,17 @@ export function ExtraTables({
   onToggleTable,
 }: ExtraTablesProps) {
   const page = currentPage + 1
+  // The page's own table — its first list, which the primary table already
+  // shows — is left out here so a statement's Other Debits is not drawn twice
+  // on a page that is its own and a second list's continuation both.
+  const ownTitle = pages.find((each) => each.page === page)?.result.title
   const onPage = useMemo(
     () =>
       tables
+        .filter((table) => table.title !== ownTitle)
         .map((table) => ({ table, rows: table.rows.filter((row) => row.page === page) }))
         .filter(({ rows }) => rows.length > 0),
-    [tables, page],
+    [tables, page, ownTitle],
   )
   if (onPage.length === 0) return null
   const base = exportBaseName(fileName, 'receipt')
@@ -547,6 +683,7 @@ export function ExtraTables({
     <>
       {onPage.map(({ table, rows }) => {
         const out = dropped.has(table.key)
+        const classes = tableColumnClasses(table.headers, rows.map((row) => row.cells))
         return (
         <div className={`card${out ? ' card--dropped' : ''}`} key={table.key}>
           <div className="card__head">
@@ -653,11 +790,11 @@ export function ExtraTables({
           </div>
           <div className="card__body card__body--compact">
             <div className="table-responsive">
-              <table className="fields">
+              <table className="fields fields--static">
                 <thead>
                   <tr>
                     {table.headers.map((header, index) => (
-                      <th key={`${header}-${index}`} className={index === 0 ? 'col--text' : 'num'}>
+                      <th key={`${header}-${index}`} className={classes[index] ?? 'col--text'}>
                         {header}
                       </th>
                     ))}
@@ -667,7 +804,11 @@ export function ExtraTables({
                   {rows.map((row, index) => (
                     <tr key={index}>
                       {table.headers.map((header, cell) => (
-                        <td key={`${header}-${cell}`} className={cell === 0 ? 'col--text' : 'num'}>
+                        <td
+                          key={`${header}-${cell}`}
+                          className={classes[cell] ?? 'col--text'}
+                          title={(row.cells[cell] ?? '').length > CELL_CHARS[classes[cell] ?? 'col--text'] ? row.cells[cell] : undefined}
+                        >
                           {row.cells[cell] ?? ''}
                         </td>
                       ))}

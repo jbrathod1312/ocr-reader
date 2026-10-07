@@ -4,13 +4,12 @@ Read a receipt with PP-OCR and emit word boxes as JSON.
 
 Why this exists outside the browser app
 ---------------------------------------
-The app reads these receipts with Tesseract. Its remaining errors are all
-character-level and all where the watermark has thinned the print: `/` read as
-`1` in a settled date, `8` as `6` in an amount, `L/T` as `LIT`. That is the
-failure mode a model trained on photographs is least prone to, so PP-OCR is
-worth trying — but wiring it into the browser is blocked on OpenCV.js, which
+PP-OCR cannot run in the browser: its ONNX stages need OpenCV, and OpenCV.js
 wedges the main thread for minutes on a 10 MB synchronous WASM init and never
-recovers. There is no such problem here.
+recovers. There is no such problem here, so the app posts the file to
+`serve.py` and this reads it. A model trained on photographs is also the least
+prone to the failures a thinned watermark causes in print: `/` read as `1` in a
+date, `8` as `6` in an amount, `L/T` as `LIT`.
 
 What this deliberately does NOT do
 ----------------------------------

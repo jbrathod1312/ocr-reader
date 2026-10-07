@@ -79,10 +79,23 @@ export function ExportDock({
   // nobody has asked to see is a round trip for nothing.
   const [json, setJson] = useState('')
   const [logJson, setLogJson] = useState('')
-  const rowCount = useMemo(
-    () => pages.reduce((count, { result }) => count + result.rows.length, 0),
-    [pages],
-  )
+  // A statement read as several named lists keeps its page's own list and each
+  // list beside it, so its rows are counted across those lists rather than the
+  // one the page draws first; any other document is counted by its own rows.
+  const rowCount = useMemo(() => {
+    const stacked = pages.some(({ result }) => {
+      const own = result.tables[0]?.title
+      return !!own && result.tables.slice(1).some((table) => table.title === own)
+    })
+    return pages.reduce(
+      (count, { result }) =>
+        count +
+        (stacked
+          ? result.tables.slice(1).reduce((sum, table) => sum + table.rows.length, 0)
+          : result.rows.length),
+      0,
+    )
+  }, [pages])
   const exportReady = !reading && pages.length > 0
   const exportWaiting = reading ? 'Export includes every page once all of them are read' : undefined
   const exportBase = exportBaseName(fileName, `${pages[0]?.result.kind ?? 'receipt'}-receipt`)

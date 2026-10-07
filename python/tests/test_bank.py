@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from reader.bank.checks import audit, infer_roles, txn_from  # noqa: E402
 from reader.bank.columns import is_date_token  # noqa: E402
+from reader.bank.fields import read_fields  # noqa: E402
 from reader.bank.money import is_money, parse_money  # noqa: E402
 from reader.bank.statement import _Page, read_pages  # noqa: E402
 from reader.boxes import WordBox  # noqa: E402
@@ -142,6 +143,23 @@ def test_which_column_is_the_balance_is_found_by_arithmetic_not_by_title():
         assert summary["debits"] == "65.00"
 
 
+def test_each_columns_part_is_reported_by_its_place_among_the_cells():
+    """The table draws whole rows, so the summary counts columns the way it does."""
+    for titles in (TITLES, OTHER_WORDS, GIBBERISH):
+        _, summary = read(page(titles))
+        # date, check, description, debit, credit, balance
+        assert summary["columns"] == {"date": 0, "balance": 5, "credits": [4], "debits": [3]}
+        assert summary["newestFirst"] is True
+
+
+def test_nothing_is_claimed_about_the_columns_when_the_figures_are_not_a_ledger():
+    rows = [(row[0], row[1], row[2], row[3], row[4], "704.20") for row in ROWS]
+    _, summary = read(page(GIBBERISH, rows, extras=False))
+    assert summary["columns"] == {"date": 0, "balance": None, "credits": [], "debits": []}
+    assert summary["newestFirst"] is None
+    assert summary["balanceCheck"] == "unchecked"
+
+
 def test_figures_under_the_rows_are_the_printed_totals_by_position_alone():
     readings, summary = read(page(GIBBERISH))
     assert summary["stated"]["debits"] == "65.00"
@@ -163,6 +181,94 @@ def test_a_row_with_no_readable_date_is_still_a_row():
     readings, summary = read(page(GIBBERISH, rows))
     assert summary["transactions"] == 5
     assert summary["balanceCheck"] == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# The fields printed beside the table                                          #
+# --------------------------------------------------------------------------- #
+
+
+def head(*lines: tuple[float, tuple[tuple[str, float], ...]]) -> list[WordBox]:
+    """
+    Words at the places a page prints its head: (y, ((run, x), …)).
+
+    A run is laid out word by word, as a reader hands them over: `Account
+    Number: 107210006444` is three boxes, and the colon ends the second.
+    """
+    out: list[WordBox] = []
+    for y, runs in lines:
+        for text, x in runs:
+            at = x
+            for token in text.split():
+                out.append(w(token, at, y))
+                at += (len(token) + 1) * 13
+    return out
+
+
+def fields(*lines: tuple[float, tuple[tuple[str, float], ...]]) -> dict[str, str]:
+    return {f.label: f.value for f in read_fields(head(*lines), H, 1)}
+
+
+def test_a_value_printed_after_the_colon_is_that_labels_value():
+    assert fields((100, (("Account Number: 107210006444", 160),))) == {
+        "Account Number": "107210006444"
+    }
+
+
+def test_a_value_printed_under_the_label_belongs_to_it():
+    """Three labels on a line, their figures on the next: each to the one above it."""
+    assert fields(
+        (100, (("Available Balance:", 160), ("Current Balance:", 800), ("Collected Balance:", 1400))),
+        (150, (("$119,789.54", 160), ("$118,789.54", 800), ("$99,754.54", 1400))),
+    ) == {
+        "Available Balance": "$119,789.54",
+        "Current Balance": "$118,789.54",
+        "Collected Balance": "$99,754.54",
+    }
+
+
+def test_a_value_set_beside_the_label_is_read_and_a_far_one_is_not():
+    near = fields((100, (("Account:", 160), ("Checking", 300))))
+    far = fields((100, (("Transaction Dates:", 160), ("Advanced Transaction Search", 1600))))
+    assert near == {"Account": "Checking"}
+    assert far == {}
+
+
+def test_a_colon_inside_a_word_is_not_a_label():
+    """A time and a URL carry one; where the mark sits is the whole difference."""
+    assert fields((100, (("10/4/26, 2:11 PM", 160), ("Treasury Management", 900)))) == {}
+    assert fields((100, (("https://example.test/accounts?id=2294153", 40),))) == {}
+
+
+def test_the_labels_are_copied_as_printed_whatever_they_say():
+    for label in ("Account Number", "Número de cuenta", "Zorb Quill"):
+        assert fields((100, ((f"{label}: 107210006444", 160),))) == {label: "107210006444"}
+
+
+def test_no_run_is_read_as_two_values():
+    """A figure under one label is not also the value of the label beside it."""
+    read = fields(
+        (100, (("Interest Rate:", 160), ("Accrued Interest:", 800))),
+        (150, (("0.00%", 160),)),
+    )
+    assert read == {"Interest Rate": "0.00%"}
+
+
+def test_the_head_is_read_beside_the_rows_and_said_once_for_the_document():
+    head_words = head(
+        (0, (("Account Number: 107210006444", 160),)),
+        (40, (("Available Balance: $119,789.54", 160),)),
+    )
+    pages = [_Page(n, 2200, 1700, "pdf text", head_words + page(TITLES)) for n in (1, 2)]
+    readings, summary = read_pages(pages)
+    assert summary["details"] == [
+        {"label": "Account Number", "value": "107210006444", "page": 1},
+        {"label": "Available Balance", "value": "$119,789.54", "page": 1},
+    ]
+    # The head is not a row, and does not disturb the rows or their titles.
+    assert summary["transactions"] == 2 * len(ROWS)
+    assert readings[0].result.headers == list(TITLES)
+    assert readings[0].result.table_rows[0].cells == list(ROWS[0])
 
 
 # --------------------------------------------------------------------------- #

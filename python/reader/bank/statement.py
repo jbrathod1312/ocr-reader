@@ -20,16 +20,25 @@ from decimal import Decimal
 from typing import Any, Sequence
 
 from ..assemble import OcrResult
+from ..bitmaptext import grid_pages, read_bitmap_pages
 from ..boxes import WordBox, median
 from ..columns import SkippedLine, TableRow
 from ..document import PageReading, Recogniser, _recognised, load_image_pixels, looks_like_pdf
-from ..pdf_text import DPI, read_pdf, render_page, text_layer_is_usable
+from ..pdf_text import DPI, page_picture, read_pdf, render_page, text_layer_is_usable
 from .checks import Audit, Roles, Txn, audit, infer_roles, txn_from
 from .columns import Column, Group, cells_of, clean, induce_columns, make_groups, usable
+from .fields import Field, read_fields
 from .labels import read_labels
 from .money import format_money, is_money, parse_money
+from .sectioned import looks_sectioned, read_sectioned
 
 TITLE = "Bank statement"
+
+#: The resolution a bitmap page's words are recognised at for the glyph reader's
+#: vote. Lower than the page is read at, because the exact text comes from the
+#: glyph shapes and the recogniser only has to be right more often than wrong;
+#: measured to read a sectioned statement identically at a third less cost.
+OPINION_DPI = 150
 
 
 @dataclass(slots=True)
@@ -41,24 +50,59 @@ class _Page:
     words: list[WordBox]
 
 
-def _pages(data: bytes, recognise: Recogniser | None, dpi: int) -> list[_Page]:
+def _pages(data: bytes, recognise: Recogniser | None, dpi: int) -> tuple[list[_Page], list[int]]:
+    """
+    Every page of the file, read as far as is cheap, and the pages left over.
+
+    A page with a text layer is read from it. A page that is a machine's bitmap
+    set on a grid — the body of a statement saved as a picture — is read from
+    its glyphs; those pages, and only those, are recognised, because the glyph
+    reader needs a recogniser's opinion to name what it has clustered. Every
+    other scanned page is left unread and returned in the second value, so the
+    caller can decide whether it is worth a recogniser at all: the deposit and
+    check images at the back of a statement are not, and a slow pass over them
+    is the difference between a read that takes a quarter of a minute and one
+    that takes over a minute.
+    """
     if not looks_like_pdf(data):
         pixels = load_image_pixels(data)
         words = _recognised(recognise, pixels) if recognise is not None else []
-        return [
-            _Page(1, int(pixels.shape[1]), int(pixels.shape[0]), "recogniser" if recognise else "none", words)
-        ]
+        page = _Page(1, int(pixels.shape[1]), int(pixels.shape[0]), "recogniser" if recognise else "none", words)
+        return [page], []
+
     pages: list[_Page] = []
+    scanned: list[int] = []
     for page in read_pdf(data, dpi):
         if text_layer_is_usable(page.words):
-            words, reader = page.words, "pdf text"
-        elif recognise is not None:
-            words = _recognised(recognise, render_page(data, page.number, dpi))
-            reader = "recogniser"
+            pages.append(_Page(page.number, page.width, page.height, "pdf text", page.words))
         else:
-            words, reader = [], "none"
-        pages.append(_Page(page.number, page.width, page.height, reader, words))
-    return pages
+            pages.append(_Page(page.number, page.width, page.height, "none", []))
+            if recognise is not None:
+                scanned.append(page.number)
+    if recognise is None or not scanned:
+        return pages, []
+
+    # The bitmap pages are told from the rest by their ink alone, no recogniser,
+    # so the recogniser is paid only for the pages it can read exactly — and
+    # paid less for each: the glyph reader takes the exact text from the shapes,
+    # and the recogniser's opinion only has to be right more often than wrong
+    # for the vote, so it is read at a coarser resolution that costs a third less.
+    by_page = {p.number: p for p in pages}
+    pictures = {n: ink for n in scanned if (ink := page_picture(data, n)) is not None}
+    grid = grid_pages(pictures)
+    if grid:
+        opinions: dict[int, list[WordBox]] = {}
+        frames: dict[int, tuple[int, int]] = {}
+        for n in grid:
+            render = render_page(data, n, OPINION_DPI)
+            opinions[n] = _recognised(recognise, render)
+            frames[n] = (int(render.shape[1]), int(render.shape[0]))
+        for number, words in read_bitmap_pages({n: pictures[n] for n in grid}, opinions, frames).items():
+            by_page[number].words = words
+            by_page[number].reader = "bitmap"
+
+    pending = [n for n in scanned if by_page[n].reader == "none"]
+    return pages, pending
 
 
 def _first_figure(cell: str) -> Decimal | None:
@@ -85,12 +129,36 @@ def read_statement(
     recognise: Recogniser | None = None,
     dpi: int = DPI,
 ) -> tuple[list[PageReading], dict[str, Any]]:
-    """Every page of a statement, read, and a summary of what the statement says."""
-    return read_pages(_pages(data, recognise, dpi))
+    """
+    Every page of a statement, read, and a summary of what the statement says.
+
+    One statement is not another. The reader is told the document is a bank
+    statement, and then the template is chosen from the page itself: a statement
+    that balances by a summary box and prints its transactions under section
+    banners is read by `sectioned`; anything else — including one with a running
+    balance beside every row — by the general ledger reader below. The choice is
+    the page's shape, so a bank whose format matches is read right without being
+    named, and a format neither reader knows still reads as far as the ledger
+    reader can take it.
+    """
+    pages, pending = _pages(data, recognise, dpi)
+    if looks_sectioned(pages):
+        # This statement's transactions are the lists on its grid pages; the
+        # pages the glyph reader did not take — its deposit and check images —
+        # carry none, so they are shown unread rather than paid a slow pass.
+        return read_sectioned(pages)
+    # A ledger statement prints a row wherever it likes, so every page it has is
+    # recognised, including the ones the glyph reader left for later.
+    if pending and recognise is not None:
+        by_page = {p.number: p for p in pages}
+        for number in pending:
+            by_page[number].words = _recognised(recognise, render_page(data, number, dpi))
+            by_page[number].reader = "recogniser"
+    return read_pages(pages)
 
 
 def read_pages(pages: Sequence[_Page]) -> tuple[list[PageReading], dict[str, Any]]:
-    """The same, from pages whose words are already in hand."""
+    """The general ledger reader: rows at dates, the balance found by arithmetic."""
     heights = [w.height for p in pages for w in usable(p.words)]
     height = median(heights) or 12
 
@@ -155,6 +223,14 @@ def read_pages(pages: Sequence[_Page]) -> tuple[list[PageReading], dict[str, Any
                 kept.append(group)
         leftovers = kept
         rows.sort(key=lambda r: (r.page, r.group.top))
+
+    # What the page prints beside its table: the head of a statement is fields,
+    # and a field is by definition not a row, so the rows go first and the
+    # fields are read from what they leave.
+    taken = {id(w) for r in rows for w in r.group.words} | title_ids
+    details: list[Field] = []
+    for page in pages:
+        details += read_fields([w for w in page.words if id(w) not in taken], height, page.number)
 
     readings: list[PageReading] = []
     txns: list[Txn] = []
@@ -234,7 +310,7 @@ def read_pages(pages: Sequence[_Page]) -> tuple[list[PageReading], dict[str, Any
                 words=list(page.words),
             )
         )
-    return readings, _summary(rows, date_column, roles, report)
+    return readings, _summary(rows, date_column, money, roles, report, details)
 
 
 def page_left(body_left: dict[int, float], page: int) -> float | None:
@@ -276,16 +352,34 @@ def _result(
     )
 
 
-def _summary(rows: Sequence[_Row], date_column: int | None, roles: Roles | None, report: Audit) -> dict[str, Any]:
+def _summary(
+    rows: Sequence[_Row],
+    date_column: int | None,
+    money_columns: Sequence[int],
+    roles: Roles | None,
+    report: Audit,
+    details: Sequence[Field],
+) -> dict[str, Any]:
     def money(value: Decimal | None) -> str | None:
         return format_money(value) if value is not None else None
 
     dates = [r.cells[date_column] for r in rows if date_column is not None and r.cells[date_column]]
     known = roles is not None
     return {
+        "kind": "ledger",
         "transactions": len(rows),
+        # The fields printed beside the rows, as printed. A head repeated on
+        # every page is one field to whoever reads it, so it is said once.
+        "details": _once([{"label": f.label, "value": f.value, "page": f.page} for f in details]),
         "firstDate": dates[0] if dates else None,
         "lastDate": dates[-1] if dates else None,
+        # Which way the rows run, so a date range reads earliest to latest
+        # whichever end of the month the statement starts at.
+        "newestFirst": roles.descending if roles else None,
+        # What the arithmetic showed each column to be, as an index into the
+        # row's cells. The reading is the same either way; this is only so the
+        # table can draw a balance as a balance and a blank credit as a blank.
+        "columns": _roles_by_column(date_column, money_columns, roles),
         "debits": money(report.money_out) if known else None,
         "credits": money(report.money_in) if known else None,
         "openingBalance": money(report.opening),
@@ -299,3 +393,38 @@ def _summary(rows: Sequence[_Row], date_column: int | None, roles: Roles | None,
             "credits": money(report.stated_in),
         },
     }
+
+
+def _roles_by_column(
+    date_column: int | None,
+    money_columns: Sequence[int],
+    roles: Roles | None,
+) -> dict[str, Any]:
+    """
+    What each column does, by its place among the row's cells.
+
+    `Roles` counts in money columns, since the arithmetic only ever sees those;
+    the page draws whole rows, so the indices are mapped back here and nowhere
+    else. Empty where no column could be shown to be a running balance: then
+    nothing is known, and saying so is better than a guess.
+    """
+    if roles is None:
+        return {"date": date_column, "balance": None, "credits": [], "debits": []}
+    return {
+        "date": date_column,
+        "balance": money_columns[roles.balance],
+        "credits": sorted(money_columns[c] for c, sign in roles.signs.items() if sign > 0),
+        "debits": sorted(money_columns[c] for c, sign in roles.signs.items() if sign < 0),
+    }
+
+
+def _once(details: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The fields in printed order, each said once however often it is printed."""
+    seen: set[tuple[str, str]] = set()
+    kept: list[dict[str, Any]] = []
+    for detail in details:
+        key = (detail["label"], detail["value"])
+        if key not in seen:
+            seen.add(key)
+            kept.append(detail)
+    return kept

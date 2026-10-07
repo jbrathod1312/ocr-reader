@@ -25,6 +25,7 @@ from .assemble import OcrResult, assemble_receipt
 from .boxes import WordBox
 from .columns import ColumnGuide
 from .glyphs import merge_glyph_runs
+from .confusables import settle_confusables
 from .pdf_text import DPI, read_pdf, render_page, text_layer_is_usable
 from .skipped import PageLines, refine
 
@@ -44,11 +45,16 @@ class PageReading:
 
 
 def _recognised(recognise: Recogniser, pixels) -> list[WordBox]:
-    """A page's words from the recogniser, with their glyphs joined."""
+    """A page's words from the recogniser, with their glyphs joined and digits settled."""
     words = recognise(pixels)
     # A recogniser that joins glyphs itself says so: it does so before it cuts
     # each word to its ink, which this must not undo.
-    return words if getattr(recognise, "glyphs_merged", False) else merge_glyph_runs(words)
+    if not getattr(recognise, "glyphs_merged", False):
+        words = merge_glyph_runs(words)
+    # A digit read as the letter it resembles is put right by the page's own
+    # typeface. Only pages read from pixels come through here: a PDF's own text
+    # is not a recognition and has nothing to doubt.
+    return settle_confusables(words, pixels)
 
 
 def looks_like_pdf(data: bytes) -> bool:
