@@ -161,9 +161,21 @@ recogniser's is not; a scan or a photograph is recognised, and only those pages 
   are found from where the page's figures line up, columns from the positions most rows
   start or end a word at, titles from what is printed over them. A totals row is the row
   whose figures equal the others' sums, found by arithmetic, not by what it is called.
-- **`reader/bank/`** reads a bank statement: rows start at a date, which column is the running
-  balance and which way each other column moves it is worked out from the arithmetic, and
-  every row is checked against the balance beside it.
+- **`reader/bank/`** reads a bank statement, and not every statement is built the same, so it
+  picks a template from the page. One prints a running balance beside every row: which column
+  that is, and which way each other column moves it, is worked out from the arithmetic, and
+  every row is checked against the balance beside it (`reader/bank/statement.py`). Another
+  prints no running balance — it states a previous and an ending balance in a box at its head,
+  with the month's additions and subtractions, and lists its transactions under `CHECKS`,
+  `OTHER DEBITS` and `CREDITS` banners; that one is read by `reader/bank/sectioned.py`, which
+  balances the box against itself and the lists against the box. The template is chosen by the
+  shape of the page, so a bank whose format matches is read right without being named.
+- **`reader/bitmaptext.py`** reads a statement that a bank's system printed and saved as a
+  picture — a scan with no text layer, but one where the same font drew every `5` as the same
+  pixels. It clusters the page's glyphs by shape and names each cluster by a vote among the
+  recogniser's readings of it, so a recogniser that is right most of the time makes the whole
+  page exact. A page that is not that kind — a photograph, a proportional face — it declines,
+  and the recogniser reads it as usual.
 - **`reader/glyphs.py`** joins the glyphs a recogniser returns one at a time (on a
   line-printer face `144732` comes back as `1 4 4 7 3 2`), then cuts each word's box to its
   own ink, so the gaps between words and columns are real, as they are in a PDF.
@@ -185,13 +197,15 @@ recogniser's is not; a scan or a photograph is recognised, and only those pages 
 python/
   reader/
     boxes.py            the word box, and grouping words into lines
-    pdf_text.py         a PDF's own text, and rendering its pages
+    pdf_text.py         a PDF's own text, its pages as pixels, a bilevel page as ink
     glyphs.py           joining a recogniser's glyphs, and cutting each word to its ink
+    bitmaptext.py       a machine's bitmap page, read exactly by voting on glyph shapes
     dates.py            dates as a page prints them, and as a recogniser misreads them
     columns.py          the general table reader, off a page's printed titles
     skipped.py          what a line the table reader left out actually is
     lottery/            a lottery page as the table it holds: rows, columns, checks
-    bank/               a bank statement: rows at dates, balance found by arithmetic
+    bank/               a bank statement, by template: statement.py (running balance),
+                        sectioned.py (a summary box over Checks/Other Debits/Credits)
     validate.py         a reading against the page's own arithmetic
     assemble.py         the general reading of a page, and its result type
     document.py         a whole file in, every page's reading out

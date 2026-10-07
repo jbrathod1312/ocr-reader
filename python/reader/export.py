@@ -262,6 +262,26 @@ def _missing_pages(pages: Sequence[ExportPage], total: int) -> list[int]:
     return [number for number in range(1, total + 1) if number not in read]
 
 
+def _stacked_sections(pages: Sequence[ExportPage]) -> bool:
+    """
+    Whether this is a document of several named tables rather than one.
+
+    A statement printed as a Checks list, an Other Debits list and a Credits
+    list is read with each list as a titled table, and its page's own table
+    repeated among them so the whole of a list that spans pages is gathered. The
+    sign of that reading — and of no other — is a page whose first table's title
+    is one of the titles among the tables beside it. An ordinary document's page
+    has no titled table of its own, or none that repeats, so it is written as one
+    grid as before.
+    """
+    for page in pages:
+        if len(page.tables) >= 2:
+            own = (page.tables[0].get("title") or "").strip()
+            if own and any((table.get("title") or "").strip() == own for table in page.tables[1:]):
+                return True
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # CSV                                                                          #
 # --------------------------------------------------------------------------- #
@@ -288,6 +308,12 @@ def to_csv(pages: Sequence[ExportPage], total: int) -> str:
     Cells go by position under each page's own headers rather than by name, so
     a table that prints two columns with the same title loses neither. A longer
     document gets a `Page` column first.
+
+    A document whose pages do not share one table — a bank statement printed as
+    a Checks list, an Other Debits list and a Credits list, each with columns of
+    its own — cannot be one grid without stranding most cells in blank columns.
+    It is written instead as those tables one after another, each under its
+    title, which is also how each one downloads on its own.
     """
     if not pages:
         return ""
@@ -295,7 +321,10 @@ def to_csv(pages: Sequence[ExportPage], total: int) -> str:
         first = pages[0]
         return csv_lines([headers_of(first), *first.rows])
 
+    if _stacked_sections(pages):
+        return _sections_csv(pages, total)
     layout = document_layout(pages)
+
     lines: list[list[str]] = [[layout.page_title, *layout.headers]]
     for page in pages:
         columns = layout.columns_of(page)
@@ -306,6 +335,13 @@ def to_csv(pages: Sequence[ExportPage], total: int) -> str:
                     row[column] = cells[index] if index < len(cells) else ""
             lines.append([str(page.page), *row])
     return csv_lines(lines)
+
+
+def _sections_csv(pages: Sequence[ExportPage], total: int) -> str:
+    """Each of a document's tables one after another, under its own title."""
+    return "\r\n\r\n".join(
+        f"{table.title}\r\n{to_table_csv(table, total)}" for table in extra_tables(pages)
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -347,6 +383,17 @@ def to_document_json(
 
     if total <= 1:
         return {**to_public_json(pages[0]), **tables}
+
+    # A document whose pages hold tables of their own, no two the same, is those
+    # tables and nothing combined: a statement's Checks, Other Debits and Credits
+    # each keep their own columns rather than being forced into one grid of mostly
+    # blanks. The tables are already in `tables`, so the document is them.
+    if _stacked_sections(pages):
+        return {
+            "kind": "sections",
+            "pages": total,
+            "tables": [to_table_json(table, total) for table in extras],
+        }
 
     layout = document_layout(pages)
     title = next((page.title for page in pages if page.title), None)

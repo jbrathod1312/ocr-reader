@@ -81,9 +81,45 @@ export interface StatementDetail {
   page: number
 }
 
+/**
+ * The figures a sectioned statement balances by, as its summary box prints
+ * them, and whether the reading agrees with them.
+ *
+ * A statement with no running balance proves itself here instead: the box
+ * states the previous and ending balances and the month's additions and
+ * subtractions, and the reading is right when `previous + additions −
+ * subtractions = ending` and the transaction lists add up to the box.
+ */
+export interface StatementBox {
+  /** As printed, or null where the statement does not print that figure. */
+  previous: string | null
+  additions: string | null
+  subtractions: string | null
+  ending: string | null
+  /** `previous + additions − subtractions = ending` holds. */
+  balances: boolean
+  /** The credits read add up to the additions the box states. */
+  additionsMatch: boolean
+  /** The checks and other debits read add up to the subtractions it states. */
+  subtractionsMatch: boolean
+}
+
 /** What a bank statement says about itself, and whether its rows agree. */
 export interface StatementSummary {
+  /**
+   * Which template read it. `ledger` proves itself by a running balance beside
+   * every row; `sectioned` by a summary box over lists of transactions. The
+   * summary shows the checks each one makes. Absent on a reader not yet
+   * restarted, which is then taken to be a ledger.
+   */
+  kind?: 'ledger' | 'sectioned'
+  /** The bank's name as the letterhead prints it, shown for a sectioned statement. */
+  bank?: string | null
   transactions: number
+  /** How many rows each named section holds, for a sectioned statement. */
+  counts?: Record<string, number>
+  /** The summary box, for a sectioned statement; absent for a ledger. */
+  box?: StatementBox
   /** The fields printed beside the rows, in printed order, each said once. */
   details: StatementDetail[]
   firstDate: string | null

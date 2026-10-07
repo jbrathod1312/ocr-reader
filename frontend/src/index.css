@@ -1365,6 +1365,26 @@ button {
   transition: all 100ms ease;
 }
 
+/*
+ * A read-only table — an extra table printed under the page's own, such as a
+ * statement's Checks or Credits list — holds plain text, not the editable
+ * inputs the primary table does, so its cells are capped here instead. Without
+ * this a Description column of sentences stretches the table past the panel and
+ * pushes its amount off the right edge; capped, it is cut short with an ellipsis
+ * and the full text is in the cell's tooltip.
+ */
+.fields--static td.col--text {
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fields--static td.col--wide {
+  max-width: clamp(16ch, 28vw, 44ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Item numbers, codes and the like. */
 .fields td.col--text .cell-input {
   max-width: 20ch;
@@ -2704,9 +2724,10 @@ dialog.confirm::backdrop {
   gap: 6px;
 }
 
-/* How many rows and over what dates: the quietest thing said here. */
+/* How many rows and over what dates: the quietest thing said here, on its own
+   line under the checks so it reads as their caption rather than crowding them. */
 .statement__period {
-  margin-left: auto;
+  margin: 0;
   font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -2814,8 +2835,20 @@ dialog.confirm::backdrop {
   color: var(--ok-text);
 }
 
-@media (max-width: 720px) {
-  .statement__period {
-    margin-left: 0;
-  }
+.statement__fact--out dd {
+  color: var(--err-text);
 }
+
+/* Opening and closing balances: figures the statement states, not money moved. */
+.statement__fact--neutral dd {
+  color: var(--text);
+}
+
+/* The bank's name, as the letterhead prints it, over a sectioned statement. */
+.statement__bank {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+

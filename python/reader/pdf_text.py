@@ -122,3 +122,42 @@ def render_page(data: bytes, number: int, dpi: int = DPI):
         pixmap = document[number - 1].get_pixmap(matrix=pymupdf.Matrix(dpi / 72, dpi / 72))
         buffer = np.frombuffer(pixmap.samples, dtype=np.uint8)
         return buffer.reshape(pixmap.height, pixmap.width, pixmap.n)
+
+
+def page_picture(data: bytes, number: int):
+    """
+    The page as the one bilevel picture it was made from, as ink, or None.
+
+    A statement that a bank's system printed and saved as an image is a single
+    black-and-white bitmap the size of the page, drawn upright, with nothing
+    else under it that carries the text. It is returned at its own resolution —
+    not rendered, which would resample it — so that every glyph the machine
+    drew twice is still the same pixels twice. A page of text, a photograph,
+    or a page of several pictures is not that and gets None.
+    """
+    import numpy as np
+
+    try:
+        with pymupdf.open(stream=data, filetype="pdf") as document:
+            page = document[number - 1]
+            area = page.rect.width * page.rect.height
+            found = []
+            for info in page.get_image_info(xrefs=True):
+                a, b, c, d, _e, _f = info["transform"]
+                x0, y0, x1, y1 = info["bbox"]
+                upright = a > 0 and d > 0 and abs(b) < 1e-3 * a and abs(c) < 1e-3 * d
+                if info.get("bpc") == 1 and info.get("xref") and upright and (x1 - x0) * (y1 - y0) >= 0.9 * area:
+                    found.append(info)
+            if len(found) != 1:
+                return None
+            pixmap = pymupdf.Pixmap(document, found[0]["xref"])
+            if pixmap.alpha:
+                pixmap = pymupdf.Pixmap(pixmap, 0)
+            if pixmap.colorspace is None or pixmap.colorspace.n != 1:
+                pixmap = pymupdf.Pixmap(pymupdf.csGRAY, pixmap)
+            grey = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)[:, :, 0]
+    except (RuntimeError, ValueError, KeyError):
+        return None
+    ink = grey < 128
+    # Ink is the minority. A picture stored the other way round is turned over.
+    return ink if ink.mean() < 0.5 else ~ink

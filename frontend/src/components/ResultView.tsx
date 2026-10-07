@@ -122,6 +122,36 @@ function columnClass(result: OcrResult, index: number): ColumnClass {
   return index === wide ? 'col--wide' : 'col--text'
 }
 
+/**
+ * The class of each column of a bare table, read from its cells the same way.
+ *
+ * The primary table profiles an `OcrResult`; an extra table carries only its
+ * headers and rows, so it is profiled on those. Without this, every column but
+ * the first was drawn as figures, and a `Description` column of sentences — the
+ * widest thing on the page — overran the table and pushed its amount off the
+ * edge. A column of figures lines up on the right; the longest text column is
+ * the one given room to grow.
+ */
+function tableColumnClasses(headers: readonly string[], rows: readonly (readonly string[])[]): ColumnClass[] {
+  const width = Math.max(headers.length, ...rows.map((row) => row.length), 0)
+  const classes: ColumnClass[] = []
+  let wide = 0
+  let longest = -1
+  for (let column = 0; column < width; column += 1) {
+    const cells = rows.map((row) => (row[column] ?? '').trim()).filter(Boolean)
+    const figures = cells.filter((cell) => cell.split(/\s+/).every((token) => FIGURE.test(token)))
+    const numeric = cells.length > 0 && figures.length >= cells.length * 0.6
+    classes.push(numeric ? 'num' : 'col--text')
+    const mean = cells.length ? cells.reduce((sum, cell) => sum + cell.length, 0) / cells.length : 0
+    if (!numeric && mean > longest) {
+      longest = mean
+      wide = column
+    }
+  }
+  if (classes[wide] === 'col--text') classes[wide] = 'col--wide'
+  return classes
+}
+
 type ColumnClass = 'num' | 'col--text' | 'col--wide'
 
 /** Which column is the running balance, and which way each amount column moves it. */
@@ -634,12 +664,17 @@ export function ExtraTables({
   onToggleTable,
 }: ExtraTablesProps) {
   const page = currentPage + 1
+  // The page's own table — its first list, which the primary table already
+  // shows — is left out here so a statement's Other Debits is not drawn twice
+  // on a page that is its own and a second list's continuation both.
+  const ownTitle = pages.find((each) => each.page === page)?.result.title
   const onPage = useMemo(
     () =>
       tables
+        .filter((table) => table.title !== ownTitle)
         .map((table) => ({ table, rows: table.rows.filter((row) => row.page === page) }))
         .filter(({ rows }) => rows.length > 0),
-    [tables, page],
+    [tables, page, ownTitle],
   )
   if (onPage.length === 0) return null
   const base = exportBaseName(fileName, 'receipt')
@@ -648,6 +683,7 @@ export function ExtraTables({
     <>
       {onPage.map(({ table, rows }) => {
         const out = dropped.has(table.key)
+        const classes = tableColumnClasses(table.headers, rows.map((row) => row.cells))
         return (
         <div className={`card${out ? ' card--dropped' : ''}`} key={table.key}>
           <div className="card__head">
@@ -754,11 +790,11 @@ export function ExtraTables({
           </div>
           <div className="card__body card__body--compact">
             <div className="table-responsive">
-              <table className="fields">
+              <table className="fields fields--static">
                 <thead>
                   <tr>
                     {table.headers.map((header, index) => (
-                      <th key={`${header}-${index}`} className={index === 0 ? 'col--text' : 'num'}>
+                      <th key={`${header}-${index}`} className={classes[index] ?? 'col--text'}>
                         {header}
                       </th>
                     ))}
@@ -768,7 +804,11 @@ export function ExtraTables({
                   {rows.map((row, index) => (
                     <tr key={index}>
                       {table.headers.map((header, cell) => (
-                        <td key={`${header}-${cell}`} className={cell === 0 ? 'col--text' : 'num'}>
+                        <td
+                          key={`${header}-${cell}`}
+                          className={classes[cell] ?? 'col--text'}
+                          title={(row.cells[cell] ?? '').length > CELL_CHARS[classes[cell] ?? 'col--text'] ? row.cells[cell] : undefined}
+                        >
                           {row.cells[cell] ?? ''}
                         </td>
                       ))}
